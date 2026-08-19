@@ -1,0 +1,39 @@
+version: "3.8"
+
+services:
+  nodegoat:
+    image: securecodebox/demo-target-nodegoat:latest
+    container_name: nodegoat
+    ports:
+      - "4000:4000"
+    environment:
+      - NODE_ENV=development
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  juiceshop:
+    image: bkimminich/juice-shop:latest
+    container_name: juiceshop
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  bwapp:
+    image: raesene/bwapp:latest
+    container_name: bwapp
+    ports:
+      - "80:80"
+    environment:
+      - MYSQL_ROOT_PASSWORD=bug
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/install.php"]
+      interval: 10s
+      timeout: 5s
+      retries: 10

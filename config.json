@@ -1,0 +1,80 @@
+{
+  "products": {
+    "juice_shop": {
+      "display_name": "OWASP Juice Shop",
+      "owner": "appsec-web",
+      "asset_criticality": 8,
+      "business_impact": 8,
+      "exposure": 9,
+      "control_effectiveness": 2,
+      "data_sensitivity": 8,
+      "url": "http://juiceshop:3000"
+    },
+    "nodegoat": {
+      "display_name": "NodeGoat",
+      "owner": "appsec-node",
+      "asset_criticality": 6,
+      "business_impact": 6,
+      "exposure": 8,
+      "control_effectiveness": 3,
+      "data_sensitivity": 6,
+      "url": "http://nodegoat:4000"
+    },
+    "bwapp": {
+      "display_name": "bWAPP",
+      "owner": "appsec-legacy",
+      "asset_criticality": 5,
+      "business_impact": 5,
+      "exposure": 7,
+      "control_effectiveness": 4,
+      "data_sensitivity": 5,
+      "url": "http://bwapp:80"
+    }
+  },
+  "scoring": {
+    "weights": {
+      "cvss": 20,
+      "epss": 20,
+      "kev": 25,
+      "exploit": 10,
+      "asset": 10,
+      "exposure": 5,
+      "data": 5,
+      "patch": 5
+    },
+    "sla_bands": [
+      {"min": 90, "priority": "P1", "sla_hours": 24},
+      {"min": 70, "priority": "P2", "sla_hours": 72},
+      {"min": 40, "priority": "P3", "sla_hours": 168},
+      {"min": 0, "priority": "P4", "sla_hours": 720}
+    ]
+  },
+  "filter": {
+    "drop_severity": ["info"],
+    "fp_patterns": [
+      "swagger", "backup file", "server header", "user agent",
+      "cookie without httponly", "cookie without secure",
+      "x-content-type-options", "x-frame-options", "x-xss-protection",
+      "hsts", "content security policy", "cross-domain"
+    ],
+    "risk_accept": []
+  },
+  "dedup": {
+    "fuzzy_title": true
+  },
+  "enrich": {
+    "cache_dir": "intel",
+    "use_nvd": true,
+    "use_searchsploit": true,
+    "kev_url": "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json",
+    "epss_url": "https://api.first.org/data/v1/epss",
+    "nvd_url": "https://services.nvd.nist.gov/rest/json/cves/2.0",
+    "cache_ttl_days": 1
+  },
+  "reporting": {
+    "top_n": 25,
+    "ticket_threshold": 60,
+    "auto_ticket": true,
+    "github_labels": ["security", "auto-generated"]
+  }
+}

@@ -1,0 +1,14 @@
+# Core runtime
+pandas>=2.0
+requests>=2.31
+
+# Testing
+pytest>=8.0
+pytest-mock>=3.12
+pytest-cov>=4.1
+
+# Optional: AI enrichment
+# anthropic>=0.34
+
+# Optional: DefectDojo integration
+# defectdojo-api>=1.0
