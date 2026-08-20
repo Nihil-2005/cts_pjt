@@ -418,6 +418,143 @@ async def create_tickets(
     return {"results": results, "dry_run": dry_run}
 
 
+# ─── Lifecycle routes ─────────────────────────────────────────────────────
+
+@app.get("/api/lifecycle/dashboard")
+async def lifecycle_dashboard(user: str = Depends(get_current_user)):
+    """Get lifecycle dashboard data."""
+    from .lifecycle import LifecycleManager
+    lc = LifecycleManager("outputs/lifecycle.db")
+    data = lc.get_dashboard_data()
+    lc.close()
+    return data
+
+
+@app.get("/api/lifecycle/overdue")
+async def lifecycle_overdue(user: str = Depends(get_current_user)):
+    """Get overdue findings (SLA breached)."""
+    from .lifecycle import LifecycleManager
+    lc = LifecycleManager("outputs/lifecycle.db")
+    data = lc.get_overdue_summary()
+    lc.close()
+    return data
+
+
+@app.post("/api/lifecycle/{finding_id}/transition")
+async def lifecycle_transition(finding_id: str, status: str, reason: str = "", user: str = Depends(get_current_user)):
+    """Transition a finding's lifecycle status."""
+    from .lifecycle import LifecycleManager
+    lc = LifecycleManager("outputs/lifecycle.db")
+    ok = lc.transition_status(finding_id, status, reason)
+    lc.close()
+    if not ok:
+        raise HTTPException(status_code=400, detail="Invalid transition")
+    return {"status": status, "finding_id": finding_id}
+
+
+# ─── Export routes ─────────────────────────────────────────────────────────
+
+@app.get("/api/exports/sarif")
+async def export_sarif(user: str = Depends(get_current_user)):
+    """Download SARIF file."""
+    path = "outputs/results.sarif"
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="Run pipeline first")
+    return FileResponse(path, media_type="application/json", filename="results.sarif")
+
+
+@app.get("/api/exports/cyclonedx")
+async def export_cyclonedx(user: str = Depends(get_current_user)):
+    """Download CycloneDX SBOM."""
+    path = "outputs/bom.json"
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="Run pipeline first")
+    return FileResponse(path, media_type="application/json", filename="bom.json")
+
+
+@app.get("/api/exports/defectdojo")
+async def export_defectdojo(user: str = Depends(get_current_user)):
+    """Download DefectDojo import file."""
+    path = "outputs/defectdojo_import.json"
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="Run pipeline first")
+    return FileResponse(path, media_type="application/json", filename="defectdojo_import.json")
+
+
+# ─── Jira routes ───────────────────────────────────────────────────────────
+
+@app.post("/api/jira/test")
+async def jira_test(user: str = Depends(get_current_user)):
+    """Test Jira connection."""
+    from .jira_client import JiraClient
+    client = JiraClient()
+    return client.test_connection()
+
+
+@app.post("/api/jira/create")
+async def jira_create(threshold: int = 60, user: str = Depends(get_current_user)):
+    """Create Jira Issues for findings above threshold."""
+    from .jira_client import JiraClient
+    client = JiraClient()
+    if not client.configured:
+        raise HTTPException(status_code=400, detail="Jira not configured. Set JIRA_URL, JIRA_USER, JIRA_TOKEN, JIRA_PROJECT")
+
+    findings_path = "outputs/ranked_findings.json"
+    if not os.path.exists(findings_path):
+        raise HTTPException(status_code=404, detail="No pipeline output found")
+
+    import json as _json
+    with open(findings_path) as fh:
+        data = _json.load(fh)
+    from .models import Finding
+    findings = [Finding(
+        scanner=r.get("scanner", ""), product=r.get("product", ""),
+        title=r.get("title", ""), severity=r.get("severity", "info"),
+        cve=r.get("cve"), cwe=r.get("cwe"), endpoint=r.get("endpoint"),
+        score=r.get("score"), priority=r.get("priority"),
+    ) for r in data]
+
+    result = client.create_issues_bulk(findings)
+    return result
+
+
+# ─── DefectDojo routes ─────────────────────────────────────────────────────
+
+@app.post("/api/defectdojo/test")
+async def defectdojo_test(user: str = Depends(get_current_user)):
+    """Test DefectDojo connection."""
+    from .defectdojo_client import DefectDojoClient
+    client = DefectDojoClient()
+    return client.test_connection()
+
+
+@app.post("/api/defectdojo/import")
+async def defectdojo_import(product_name: str, user: str = Depends(get_current_user)):
+    """Import findings into DefectDojo."""
+    from .defectdojo_client import DefectDojoClient
+    from .defectdojo_client import import_to_defectdojo
+    client = DefectDojoClient()
+    if not client.configured:
+        raise HTTPException(status_code=400, detail="DefectDojo not configured. Set DEFECTDOJO_URL and DEFECTDOJO_API_KEY")
+
+    findings_path = "outputs/ranked_findings.json"
+    if not os.path.exists(findings_path):
+        raise HTTPException(status_code=404, detail="No pipeline output found")
+
+    import json as _json
+    from .models import Finding
+    with open(findings_path) as fh:
+        data = _json.load(fh)
+    findings = [Finding(
+        scanner=r.get("scanner", ""), product=r.get("product", ""),
+        title=r.get("title", ""), severity=r.get("severity", "info"),
+        cve=r.get("cve"), cwe=r.get("cwe"), endpoint=r.get("endpoint"),
+        score=r.get("score"), description=r.get("description", ""),
+    ) for r in data]
+
+    return import_to_defectdojo(findings, product_name)
+
+
 # ─── WebSocket for live updates ──────────────────────────────────────────────
 
 @app.websocket("/ws/live")

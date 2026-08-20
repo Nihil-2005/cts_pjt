@@ -248,6 +248,32 @@ def run_pipeline(
         products_config=config.products,
     )
 
+    # SARIF export (GitHub Security tab)
+    from . import sarif_export
+    sarif_export.write_sarif(
+        os.path.join(out_dir, "results.sarif"), ranked)
+
+    # CycloneDX SBOM
+    sarif_export.write_cyclonedx(
+        os.path.join(out_dir, "bom.json"), ranked)
+
+    # DefectDojo import format
+    sarif_export.write_defectdojo(
+        os.path.join(out_dir, "defectdojo_import.json"), ranked)
+
+    # Lifecycle tracking
+    from . import lifecycle
+    lc = lifecycle.LifecycleManager(os.path.join(out_dir, "lifecycle.db"))
+    for product in summary.products:
+        pf = [f for f in active if f.product == product]
+        pscores = [f.score or 0 for f in pf]
+        lc.record_engagement(
+            run_date=run_date, product=product,
+            current_findings=pf,
+            summary_stats={"avg_score": round(sum(pscores) / len(pscores), 1) if pscores else 0.0},
+        )
+    lc.close()
+
     print(f"\n{'=' * 60}")
     print("[DONE] PIPELINE COMPLETE")
     print(f"{'=' * 60}")
@@ -259,6 +285,10 @@ def run_pipeline(
     print(f"  - noise_reduction.json")
     print(f"  - risk_dashboard.html")
     print(f"  - history.db")
+    print(f"  - results.sarif")
+    print(f"  - bom.json (CycloneDX SBOM)")
+    print(f"  - defectdojo_import.json")
+    print(f"  - lifecycle.db")
 
     return {
         "findings": findings,

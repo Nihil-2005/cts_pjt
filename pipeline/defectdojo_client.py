@@ -1,173 +1,313 @@
-"""Thin DefectDojo API v2 client (optional integration).
+"""DefectDojo API client for importing findings.
 
-Responsible for:
-  - upserting a Product (per pipeline product/target),
-  - creating/attaching an Engagement + Test,
-  - pushing each *deduplicated, enriched* finding as a DefectDojo Finding.
+Supports:
+- Import findings via DefectDojo REST API v2
+- Create engagements for each pipeline run
+- Auto-map products to DefectDojo products
+- Status sync between DefectDojo and our lifecycle
 
-Uses only ``requests`` (no extra deps beyond what's in requirements.txt).
+Requires:
+    DEFECTDOJO_URL=http://localhost:8080
+    DEFECTDOJO_API_KEY=your-api-key
+
+API docs: https://defectdojo.github.io/django-DefectDojo/
 """
 from __future__ import annotations
 
+import json
 import os
-from typing import Any, Dict, List, Optional
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Tuple
 
-try:
-    import requests
-except ImportError:
-    requests = None  # type: ignore[assignment]
+import requests
 
-DEFAULT_BASE_URL = os.environ.get("DD_BASE_URL", "http://localhost:8080")
-DEFAULT_TOKEN = os.environ.get("DD_API_TOKEN", "")
-
-
-class DefectDojoError(RuntimeError):
-    pass
+from .models import Finding
 
 
 class DefectDojoClient:
-    def __init__(self, base_url: Optional[str] = None, api_token: Optional[str] = None,
-                 verify_ssl: bool = True, timeout: int = 30):
-        if requests is None:
-            raise DefectDojoError("requests library not installed: pip install requests")
-        self.base_url = (base_url or DEFAULT_BASE_URL).rstrip("/")
-        self.api_token = api_token if api_token is not None else DEFAULT_TOKEN
-        self.verify_ssl = verify_ssl
-        self.timeout = timeout
-        self.session = requests.Session()
-        self.session.headers.update({
-            "Authorization": f"Token {self.api_token}",
-            "Accept": "application/json",
-        })
+    """Client for DefectDojo REST API v2."""
 
-    # ------------------------------------------------------------------ core
-    def _request(self, method: str, path: str, params: Optional[Dict] = None,
-                 json_body: Optional[Dict] = None) -> Dict[str, Any]:
+    def __init__(
+        self,
+        base_url: Optional[str] = None,
+        api_key: Optional[str] = None,
+    ):
+        self.base_url = (base_url or os.environ.get("DEFECTDOJO_URL", "")).rstrip("/")
+        self.api_key = api_key or os.environ.get("DEFECTDOJO_API_KEY", "")
+        self._headers = {
+            "Authorization": f"Token {self.api_key}",
+            "Content-Type": "application/json",
+        } if self.api_key else {}
+
+    @property
+    def configured(self) -> bool:
+        return bool(self.base_url and self.api_key)
+
+    def _api(self, method: str, path: str, **kwargs) -> requests.Response:
         url = f"{self.base_url}/api/v2/{path.lstrip('/')}"
-        resp = self.session.request(method, url, params=params, json=json_body,
-                                    verify=self.verify_ssl, timeout=self.timeout)
-        if resp.status_code >= 400:
-            raise DefectDojoError(
-                f"DefectDojo {method} {path} -> HTTP {resp.status_code}: {resp.text[:300]}")
-        try:
-            return resp.json()
-        except ValueError:
-            return {}
+        return requests.request(method, url, headers=self._headers,
+                                json=kwargs.get("json"),
+                                data=kwargs.get("data"),
+                                files=kwargs.get("files"),
+                                timeout=60)
 
-    def get(self, path: str, params: Optional[Dict] = None) -> Dict[str, Any]:
-        return self._request("GET", path, params=params)
+    # ─── Products ────────────────────────────────────────────────────────
 
-    def post(self, path: str, body: Dict) -> Dict[str, Any]:
-        return self._request("POST", path, json_body=body)
+    def list_products(self) -> List[Dict]:
+        """List all DefectDojo products."""
+        if not self.configured:
+            return []
+        resp = self._api("GET", "products/", params={"limit": 200})
+        if resp.status_code == 200:
+            return resp.json().get("results", [])
+        return []
 
-    def patch(self, path: str, body: Dict) -> Dict[str, Any]:
-        return self._request("PATCH", path, json_body=body)
+    def get_or_create_product(self, name: str, description: str = "") -> Optional[int]:
+        """Get product ID by name, or create it. Returns product ID."""
+        if not self.configured:
+            return None
 
-    # ------------------------------------------------------------- resources
-    def upsert_product(self, name: str, description: str = "",
-                       prod_type: str = "Research & Development") -> Dict[str, Any]:
-        data = self.get("products/", params={"name": name, "limit": 1}).get("results", [])
-        if data:
-            return data[0]
-        pt_id = self._product_type_id(prod_type)
-        return self.post("products/", {
+        # Search existing
+        resp = self._api("GET", "products/", params={"name": name, "limit": 10})
+        if resp.status_code == 200:
+            results = resp.json().get("results", [])
+            for p in results:
+                if p.get("name", "").lower() == name.lower():
+                    return p["id"]
+
+        # Create new
+        resp = self._api("POST", "products/", json={
             "name": name,
-            "description": description or f"Risk-pipeline product for {name}",
-            "prod_type": pt_id,
+            "description": description or f"Auto-created by DevSecOps Pipeline",
+            "prod_type": 1,  # default product type
         })
+        if resp.status_code in (200, 201):
+            return resp.json().get("id")
+        return None
 
-    def _product_type_id(self, name: str) -> int:
-        data = self.get("product_types/", params={"name": name, "limit": 1}).get("results", [])
-        if data:
-            return data[0]["id"]
-        return self.post("product_types/", {"name": name})["id"]
+    # ─── Engagements ─────────────────────────────────────────────────────
 
-    def upsert_engagement(self, product_id: int, name: str,
-                          description: str = "") -> Dict[str, Any]:
-        data = self.get("engagements/", params={"product": product_id, "limit": 5}).get("results", [])
-        for eng in data:
-            if eng.get("name") == name and eng.get("status") in ("In Progress", "Active"):
-                return eng
-        return self.post("engagements/", {
+    def create_engagement(
+        self,
+        name: str,
+        product_id: int,
+        target_start: str = "",
+        target_end: str = "",
+    ) -> Optional[int]:
+        """Create an engagement (scan session). Returns engagement ID."""
+        if not self.configured:
+            return None
+
+        now = target_start or datetime.utcnow().strftime("%Y-%m-%d")
+        end = target_end or now
+
+        resp = self._api("POST", "engagements/", json={
             "name": name,
             "product": product_id,
-            "target_start": _today(),
-            "target_end": _today(),
-            "status": "In Progress",
-            "description": description or "Auto-created by the risk pipeline.",
+            "target_start": now,
+            "target_end": end,
+            "status": "Completed",
+            "engagement_type": "Technical",
         })
+        if resp.status_code in (200, 201):
+            return resp.json().get("id")
+        return None
 
-    def upsert_test(self, engagement_id: int, test_type: str = "Manual Finding") -> Dict[str, Any]:
-        data = self.get("tests/", params={"engagement": engagement_id, "limit": 20}).get("results", [])
-        for t in data:
-            if t.get("test_type_name") == test_type:
-                return t
-        tt_id = self._test_type_id(test_type)
-        return self.post("tests/", {
+    # ─── Import findings ─────────────────────────────────────────────────
+
+    def import_findings(
+        self,
+        findings: List[Finding],
+        engagement_id: int,
+        scan_type: str = "DevSecOps Pipeline",
+    ) -> Dict[str, Any]:
+        """Import findings into DefectDojo via JSON import.
+
+        Returns import summary.
+        """
+        if not self.configured:
+            return {"configured": False, "error": "Not configured"}
+
+        # Build the JSON import payload
+        import_data = {
+            "scan_type": scan_type,
             "engagement": engagement_id,
-            "test_type": tt_id,
-            "title": f"Risk pipeline — {test_type}",
-            "target_start": _today(),
-            "target_end": _today(),
-            "description": "Deduplicated + enriched findings pushed by the risk pipeline.",
+            "close_old_findings": False,
+            "skip_duplicates": True,
+            "file_format": "json",
+        }
+
+        # Convert findings to DefectDojo format
+        findings_data = []
+        for f in findings:
+            if f.status != "active":
+                continue
+
+            finding_dict = {
+                "title": f.title,
+                "description": f.description or f.title,
+                "severity": f.severity.upper() if f.severity else "INFO",
+                "cwe": self._parse_cwe(f.cwe),
+                "cve": f.cve,
+                "cvss": f.nvd_cvss,
+                "url": f.endpoint,
+                "steps_to_reproduce": f.evidence or "",
+                "mitigation": f.remediation or "",
+                "impact": f.description[:200] if f.description else "",
+                "false_p": False,
+                "active": True,
+                "verified": False,
+                "duplicate": False,
+                "out_of_scope": False,
+                "risk_accepted": False,
+                "component_name": f.package,
+                "component_version": f.installed_version,
+            }
+            findings_data.append(finding_dict)
+
+        if not findings_data:
+            return {"configured": True, "imported": 0, "message": "No active findings to import"}
+
+        # Use the JSON import endpoint
+        json_payload = json.dumps(findings_data)
+        resp = self._api("POST", "import-scan/", data={
+            "engagement": engagement_id,
+            "scan_type": "JSON Import",
+            "close_old_findings": "false",
+            "skip_duplicates": "true",
+        }, files={
+            ("file", ("findings.json", json_payload, "application/json")),
         })
 
-    def _test_type_id(self, name: str) -> int:
-        data = self.get("test_types/", params={"name": name, "limit": 1}).get("results", [])
-        if data:
-            return data[0]["id"]
-        return self.post("test_types/", {"name": name})["id"]
+        if resp.status_code in (200, 201):
+            data = resp.json()
+            return {
+                "configured": True,
+                "imported": data.get("test", {}).get("finding_count", len(findings_data)),
+                "test_id": data.get("test", {}).get("id"),
+                "engagement_id": engagement_id,
+                "message": "Findings imported successfully",
+            }
 
-    def push_finding(self, test_id: int, payload: Dict, product_id: Optional[int] = None) -> Dict[str, Any]:
-        sev = str(payload["severity"]).capitalize()
-        body = {
-            "test": test_id,
-            "found_by": [test_id],
-            "title": payload["title"],
-            "severity": sev,
-            "description": payload["description"],
-            "mitigation": payload.get("mitigation", ""),
-            "references": payload.get("references", ""),
-            "cwe": payload.get("cwe"),
-            "cve": payload.get("cve"),
-            "cvssv3": _cvss_vector(payload.get("cvssv3")),
-            "cvssv3_score": payload.get("cvssv3"),
-            "epss_score": payload.get("epss_score"),
-            "epss_percentile": payload.get("epss_percentile"),
-            "known_exploited": payload.get("known_exploited"),
-            "kev_date": payload.get("kev_date"),
-            "active": payload.get("active", True),
-            "verified": payload.get("verified", True),
-            "numerical_severity": _numerical_severity(sev),
-            "deduplication_on_engagement": True,
-            "impact": payload.get("impact", ""),
+        return {
+            "configured": True,
+            "imported": 0,
+            "error": resp.text[:500],
+            "status_code": resp.status_code,
         }
-        return self.post("findings/", body)
+
+    # ─── Status sync ─────────────────────────────────────────────────────
+
+    def get_findings(self, engagement_id: Optional[int] = None) -> List[Dict]:
+        """Get findings from DefectDojo, optionally filtered by engagement."""
+        if not self.configured:
+            return []
+
+        params = {"limit": 500}
+        if engagement_id:
+            params["test__engagement"] = engagement_id
+
+        resp = self._api("GET", "findings/", params=params)
+        if resp.status_code == 200:
+            return resp.json().get("results", [])
+        return []
+
+    def update_finding_status(self, finding_id: int, status: str) -> bool:
+        """Update a finding's status in DefectDojo."""
+        if not self.configured:
+            return False
+
+        status_map = {
+            "open": {"active": True, "verified": False},
+            "in_progress": {"active": True, "verified": False},
+            "fixed": {"active": False, "verified": True},
+            "verified": {"active": False, "verified": True},
+            "false_positive": {"active": False, "false_p": True},
+            "risk_accepted": {"active": True, "risk_accepted": True},
+        }
+
+        update = status_map.get(status, {})
+        if not update:
+            return False
+
+        resp = self._api("PATCH", f"findings/{finding_id}/", json=update)
+        return resp.status_code in (200, 204)
+
+    # ─── Connection test ─────────────────────────────────────────────────
+
+    def test_connection(self) -> Dict[str, Any]:
+        """Test DefectDojo connection."""
+        if not self.configured:
+            return {
+                "configured": False,
+                "error": "Missing DEFECTDOJO_URL or DEFECTDOJO_API_KEY",
+            }
+
+        resp = self._api("GET", "users/me/")
+        if resp.status_code == 200:
+            user = resp.json()
+            return {
+                "configured": True,
+                "connected": True,
+                "user": user.get("username", ""),
+                "url": self.base_url,
+            }
+
+        # Try the root API endpoint
+        resp = self._api("GET", "")
+        if resp.status_code == 200:
+            return {
+                "configured": True,
+                "connected": True,
+                "user": "unknown",
+                "url": self.base_url,
+            }
+
+        return {
+            "configured": True,
+            "connected": False,
+            "error": resp.text[:200],
+        }
+
+    # ─── Helpers ─────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _parse_cwe(cwe: Optional[str]) -> Optional[int]:
+        """Extract CWE number from string like 'CWE-89'."""
+        if not cwe:
+            return None
+        try:
+            return int(cwe.replace("CWE-", "").replace("cwe-", "").strip())
+        except (ValueError, TypeError):
+            return None
 
 
-def _today() -> str:
-    import datetime as dt
-    return dt.date.today().isoformat()
+# ─── Convenience function ───────────────────────────────────────────────────
 
+def import_to_defectdojo(
+    findings: List[Finding],
+    product_name: str,
+    engagement_name: str = "",
+) -> Dict[str, Any]:
+    """One-shot import: create product, engagement, and import findings."""
+    client = DefectDojoClient()
 
-def _numerical_severity(sev: str) -> str:
-    return {"Critical": "S0", "High": "S1", "Medium": "S2", "Low": "S3", "Info": "S4"}.get(sev, "S4")
+    if not client.configured:
+        return {"configured": False, "error": "Set DEFECTDOJO_URL and DEFECTDOJO_API_KEY"}
 
+    # Get or create product
+    product_id = client.get_or_create_product(product_name)
+    if not product_id:
+        return {"configured": True, "error": "Failed to create/get product"}
 
-def _cvss_vector(score: Optional[float]) -> Optional[str]:
-    """Best-effort CVSS v3 vector string from a bare score."""
-    if score is None:
-        return None
-    try:
-        s = float(score)
-    except (TypeError, ValueError):
-        return None
-    if not 0 <= s <= 10:
-        return None
-    if s >= 9.0:
-        return "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
-    if s >= 7.0:
-        return "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:L/A:L"
-    if s >= 4.0:
-        return "CVSS:3.1/AV:N/AC:L/PR:L/UI:R/S:U/C:L/I:L/A:N"
-    return "CVSS:3.1/AV:N/AC:H/PR:L/UI:R/S:U/C:L/I:N/A:N"
+    # Create engagement
+    eng_name = engagement_name or f"Pipeline Run {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}"
+    engagement_id = client.create_engagement(eng_name, product_id)
+    if not engagement_id:
+        return {"configured": True, "error": "Failed to create engagement"}
+
+    # Import findings
+    result = client.import_findings(findings, engagement_id)
+    result["product_id"] = product_id
+    result["engagement_id"] = engagement_id
+    return result
