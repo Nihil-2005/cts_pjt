@@ -367,39 +367,37 @@ python -m pipeline.run \
 echo ""
 success "Pipeline complete!"
 
-# ─── STEP 7: Open Dashboard ────────────────────────────────────────────────
-header "STEP 7/7: Opening Dashboard"
+# ─── STEP 7: Start Dashboard Server ──────────────────────────────────────
+header "STEP 7/7: Starting Dashboard Server"
 
-DASHBOARD="$OUTPUT_DIR/risk_dashboard.html"
+info "Starting FastAPI server on http://localhost:8000 ..."
+info "Opening browser in 3 seconds..."
 
-if [ -f "$DASHBOARD" ]; then
-    info "Dashboard found: $DASHBOARD"
-    info "Opening in your default browser..."
-    open_browser "$DASHBOARD"
-    success "Dashboard opened!"
-else
-    error "Dashboard not found at $DASHBOARD"
-    warn "Pipeline may have failed — check outputs/ directory"
-fi
+# Open browser after a short delay
+(sleep 3 && open_browser "http://localhost:8000") &
+
+# Start the server (blocks until Ctrl+C)
+echo ""
+echo "  Dashboard: http://localhost:8000"
+echo "  Login:     admin / admin"
+echo ""
+echo "  Press Ctrl+C to stop the server."
+echo ""
+
+python -m pipeline.server
 
 # ─── Summary ────────────────────────────────────────────────────────────────
 echo ""
 echo -e "${BOLD}${GREEN}══════════════════════════════════════════════════════════════${NC}"
-echo -e "${BOLD}${GREEN}  ALL DONE! Pipeline Complete.${NC}"
+echo -e "${BOLD}${GREEN}  ALL DONE! Server is running.${NC}"
 echo -e "${BOLD}${GREEN}══════════════════════════════════════════════════════════════${NC}"
 echo ""
-echo "  Generated files:"
-echo "    outputs/ranked_findings.csv   — Ranked vulnerability list"
-echo "    outputs/ranked_findings.json  — Same in JSON"
-echo "    outputs/analytics.csv         — Statistics & charts data"
-echo "    outputs/top_actions.md        — Quick action list"
-echo "    outputs/tickets_ready.md      — Ticket-ready findings"
-echo "    outputs/risk_dashboard.html   — Interactive dashboard"
-echo "    outputs/noise_reduction.json  — Dedup metrics"
+echo "  Dashboard:  http://localhost:8000"
+echo "  Login:      admin / admin"
 echo ""
-echo "  To re-run the pipeline later:"
+echo "  To restart later:"
 echo "    source venv/Scripts/activate   # or venv/bin/activate on Mac/Linux"
-echo "    python -m pipeline.run --reports scan_reports/ --config config.json --out outputs/"
+echo "    python -m pipeline.server"
 echo ""
 echo "  To stop the target apps:"
 echo "    docker compose -f targets/docker-compose.yml down"

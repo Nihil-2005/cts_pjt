@@ -41,6 +41,7 @@ set "SCRIPT_DIR=%~dp0"
 
 echo.
 echo ============================================================
-echo   Done! Check your browser for the dashboard.
+echo   Done! Dashboard should be opening in your browser.
+echo   Or open http://localhost:8000 manually.
 echo ============================================================
 pause
