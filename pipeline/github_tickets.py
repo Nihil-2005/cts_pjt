@@ -70,11 +70,11 @@ class GitHubTickets:
                  "errors": []}
         labels = labels or ["security", "auto-generated"]
 
-        if not self.token:
+        existing = self._open_issue_titles() if not self.dry_run and self.token else set()
+
+        if not self.token and not self.dry_run:
             stats["errors"].append("No GitHub token configured")
             return stats
-
-        existing = self._open_issue_titles() if not self.dry_run else set()
 
         for f in findings:
             if f.status != "active":
@@ -104,6 +104,58 @@ class GitHubTickets:
                 stats["errors"].append(str(exc))
 
         return stats
+
+
+def create_tickets_per_product(
+    findings: List[Finding],
+    products_config: Dict[str, Any],
+    token: str,
+    threshold: float = 60.0,
+    labels: List[str] = None,
+    dry_run: bool = False,
+) -> Dict[str, Any]:
+    """Auto-route GitHub Issues to each product's configured repo.
+
+    For each product that has a github_repo set, creates Issues in that repo.
+    Products without a github_repo are skipped.
+    """
+    labels = labels or ["security", "auto-generated"]
+    total_stats = {"created": 0, "skipped_duplicate": 0, "below_threshold": 0,
+                   "errors": [], "per_product": {}}
+
+    # Group findings by product
+    by_product: Dict[str, List[Finding]] = {}
+    for f in findings:
+        if f.status != "active":
+            continue
+        by_product.setdefault(f.product or "unknown", []).append(f)
+
+    # Process each product
+    for product_id, product_findings in by_product.items():
+        prod_cfg = products_config.get(product_id, {})
+        github_repo = prod_cfg.get("github_repo", "")
+
+        if not github_repo:
+            total_stats["per_product"][product_id] = {
+                "skipped": True,
+                "reason": "no github_repo configured",
+            }
+            continue
+
+        gh = GitHubTickets(github_repo, token, dry_run=dry_run)
+        stats = gh.create_tickets(product_findings, threshold=threshold, labels=labels)
+
+        total_stats["created"] += stats["created"]
+        total_stats["skipped_duplicate"] += stats["skipped_duplicate"]
+        total_stats["below_threshold"] += stats["below_threshold"]
+        total_stats["errors"].extend(stats["errors"])
+        total_stats["per_product"][product_id] = {
+            "repo": github_repo,
+            "created": stats["created"],
+            "skipped": False,
+        }
+
+    return total_stats
 
 
 def _issue_body(f: Finding) -> str:

@@ -54,8 +54,7 @@ run-pipeline:
 	python -m pipeline.run \
 		--reports scan_reports/ \
 		--config config.json \
-		--out outputs/ \
-		--enrich --attack-paths --score --remediate
+		--out outputs/
 
 dashboard:
 	python -m pipeline.dashboard \

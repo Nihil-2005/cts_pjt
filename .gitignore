@@ -17,13 +17,20 @@ env/
 .idea/
 *.swp
 *.swo
+.claudex-profile.json
+
+# Environment variables (API keys -- NEVER commit)
+.env
+.env.local
+.env.*
 
 # Pipeline outputs (generated, not committed)
 outputs/
 scan_reports/
+
+# Threat intel cache files (keep directory)
 intel/*.json
-!.gitignore
-!.gitkeep
+!intel/.gitkeep
 
 # Threat intel cache
 .threat_cache/

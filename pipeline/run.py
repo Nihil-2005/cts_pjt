@@ -13,6 +13,13 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+# Load .env file if present (harmless if missing)
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 from .config import Config
 from .models import Finding, RunSummary
 
@@ -40,6 +47,9 @@ def run_pipeline(
     skip_ai: bool = True,
     use_searchsploit: Optional[bool] = None,
     fetcher: Optional[enrich.Fetcher] = None,
+    ollama_model: Optional[str] = None,
+    groq_api_key: Optional[str] = None,
+    groq_model: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Execute all 8 stages of the risk intelligence pipeline."""
 
@@ -53,7 +63,7 @@ def run_pipeline(
     print("=" * 60)
     findings = normalize.parse_reports_dir(reports_dir, products)
     scanners_found = sorted({f.scanner for f in findings})
-    print(f"  ✅ Parsed {len(findings)} raw findings from {len(scanners_found)} scanners")
+    print(f"  [OK] Parsed {len(findings)} raw findings from {len(scanners_found)} scanners")
     print(f"  Scanners: {', '.join(scanners_found)}")
 
     # ── Stage 2: Deduplication ──────────────────────────────────────────
@@ -77,43 +87,18 @@ def run_pipeline(
 
     # ── Stage 4: Threat Enrichment ────────────────────────────────────────
     print("\n" + "=" * 60)
-    print("STAGE 4/8: THREAT ENRICHMENT (KEV / EPSS / NVD / Exploit-DB)")
+    print("STAGE 4/9: THREAT ENRICHMENT (KEV / EPSS / NVD / Exploit-DB)")
     print("=" * 60)
     enricher = enrich.Enricher(config.enrich_cfg, fetcher=fetcher)
     if not skip_enrich:
         enricher.enrich(findings, use_searchsploit=use_searchsploit)
-        print(f"  ✅ Enriched: {enricher.counts_dict()}")
+        print(f"  [OK] Enriched: {enricher.counts_dict()}")
     else:
-        print("  ⏭️  Skipped (offline mode)")
-
-    # ── Stage 4.5: AI Enrichment (optional) ─────────────────────────────
-    print("\n" + "=" * 60)
-    print("STAGE 4.5/8: AI ENRICHMENT (FP classification + smart remediation)")
-    print("=" * 60)
-    from . import ai_enrich as ai_mod
-    active_pre_ai = [f for f in findings if f.status == "active"]
-    ai_summary_stats = {
-        "raw_findings":   metrics["raw"],
-        "unique_findings": metrics["unique"],
-        "final_findings": filter_metrics["active"],
-        "p1": sum(1 for f in active_pre_ai
-                  if f.score is not None and f.score >= 90),
-        "p2": sum(1 for f in active_pre_ai
-                  if f.score is not None and 70 <= f.score < 90),
-        "p3": sum(1 for f in active_pre_ai
-                  if f.score is not None and 40 <= f.score < 70),
-        "p4": sum(1 for f in active_pre_ai
-                  if f.score is not None and f.score < 40),
-    }
-    ai_result = ai_mod.ai_enrich(
-        findings,
-        summary_stats=ai_summary_stats,
-        skip_remediation=skip_enrich,
-    ) if not skip_ai else {"used": False, "counts": {}, "executive_brief": ""}
+        print("  [SKIP] Skipped (offline mode)")
 
     # ── Stage 5: Attack Path Mapping ─────────────────────────────────────
     print("\n" + "=" * 60)
-    print("STAGE 5/8: ATTACK PATH MAPPING")
+    print("STAGE 5/9: ATTACK PATH MAPPING")
     print("=" * 60)
     all_paths: Dict[str, List[Any]] = {}
     for product in products:
@@ -123,33 +108,57 @@ def run_pipeline(
         all_paths[product] = [p.to_dict() for p in paths]
         attackpath.attach_escalation_potential(findings, paths)
     total_paths = sum(len(v) for v in all_paths.values())
-    print(f"  🕸️  {total_paths} attack paths across {len(all_paths)} products")
+    print(f"  [PATHS] {total_paths} attack paths across {len(all_paths)} products")
 
     # ── Stage 6: Risk Scoring ─────────────────────────────────────────────
     print("\n" + "=" * 60)
-    print("STAGE 6/8: RISK SCORING (8-Factor, Explainable)")
+    print("STAGE 6/9: RISK SCORING (8-Factor, Explainable)")
     print("=" * 60)
     active = [f for f in findings if f.status == "active"]
     for f in active:
         score.compute_score(f, config.product(f.product), config.weights)
     scores = [f.score or 0 for f in active]
     if scores:
-        print(f"  📊 Scored {len(active)} findings | Avg: {sum(scores)/len(scores):.1f} | Max: {max(scores):.1f}")
+        print(f"  [SCORE] Scored {len(active)} findings | Avg: {sum(scores)/len(scores):.1f} | Max: {max(scores):.1f}")
     else:
-        print(f"  📊 Scored {len(active)} findings")
+        print(f"  [SCORE] Scored {len(active)} findings")
 
-    # ── Stage 7: Remediation ──────────────────────────────────────────────
+    # ── Stage 7: AI Enrichment (FP classification + penalties + remediation)
+    # Runs AFTER scoring so FP penalties actually modify scores.
     print("\n" + "=" * 60)
-    print("STAGE 7/8: REMEDIATION (First-Aid + Full Fix)")
+    print("STAGE 7/9: AI ENRICHMENT (FP classification + smart remediation)")
+    print("=" * 60)
+    from . import ai_enrich as ai_mod
+    ai_summary_stats = {
+        "raw_findings": metrics["raw"],
+        "unique_findings": metrics["unique"],
+        "final_findings": filter_metrics["active"],
+        "p1": sum(1 for f in active if f.score is not None and f.score >= 90),
+        "p2": sum(1 for f in active if f.score is not None and 70 <= f.score < 90),
+        "p3": sum(1 for f in active if f.score is not None and 40 <= f.score < 70),
+        "p4": sum(1 for f in active if f.score is not None and f.score < 40),
+    }
+    ai_result = ai_mod.ai_enrich(
+        findings,
+        summary_stats=ai_summary_stats,
+        skip_remediation=skip_enrich,
+        ollama_model="" if skip_ai else ollama_model,
+        groq_api_key="" if skip_ai else groq_api_key,
+        groq_model=groq_model,
+    ) if not skip_ai else {"used": False, "counts": {}, "executive_brief": ""}
+
+    # ── Stage 8: Remediation (static CWE guidance for findings without AI)
+    print("\n" + "=" * 60)
+    print("STAGE 8/9: REMEDIATION (First-Aid + Full Fix)")
     print("=" * 60)
     for f in active:
         if not f.remediation_suggestions:
             f.remediation_suggestions = remediation.suggest_remediation(f)
-    print(f"  💡 Generated remediation for {len(active)} findings")
+    print(f"  [REMEDIATE] Generated remediation for {len(active)} findings")
 
-    # ── Stage 8: Ranking & Output ─────────────────────────────────────────
+    # ── Stage 9: Ranking & Output ─────────────────────────────────────────
     print("\n" + "=" * 60)
-    print("STAGE 8/8: RANKING & OUTPUT")
+    print("STAGE 9/9: RANKING & OUTPUT")
     print("=" * 60)
     ranked = output.rank_findings(findings, config)
 
@@ -236,10 +245,11 @@ def run_pipeline(
         os.path.join(out_dir, "risk_dashboard.html"),
         findings, ranked, summary, all_paths, history_map, quarantine_list,
         executive_brief=ai_result.get("executive_brief", ""),
+        products_config=config.products,
     )
 
     print(f"\n{'=' * 60}")
-    print("✅ PIPELINE COMPLETE")
+    print("[DONE] PIPELINE COMPLETE")
     print(f"{'=' * 60}")
     print(f"  Outputs in: {out_dir}")
     print(f"  - ranked_findings.csv/json")
@@ -269,6 +279,18 @@ def main():
     parser.add_argument("--skip-enrich", action="store_true", help="Skip threat intel lookups")
     parser.add_argument("--skip-ai", action="store_true", help="Skip AI enrichment")
     parser.add_argument("--searchsploit", action="store_true", help="Use Exploit-DB CSV")
+    parser.add_argument(
+        "--ollama-model", default=None,
+        help="Ollama model name (e.g. qwen2:1.5b). Use '' to disable Ollama."
+    )
+    parser.add_argument(
+        "--groq-api-key", default=None,
+        help="Groq API key (free at console.groq.com). Use '' to disable Groq."
+    )
+    parser.add_argument(
+        "--groq-model", default=None,
+        help="Groq model name (default: llama3-70b-8192)"
+    )
     args = parser.parse_args()
 
     config = Config.load(args.config)
@@ -282,11 +304,14 @@ def main():
         skip_enrich=args.skip_enrich,
         skip_ai=args.skip_ai,
         use_searchsploit=True if args.searchsploit else None,
+        ollama_model=args.ollama_model,
+        groq_api_key=args.groq_api_key or os.environ.get("GROQ_API_KEY"),
+        groq_model=args.groq_model,
     )
 
     # Exit with error if P1 findings exist (CI/CD gate)
     if result["summary"].p1 > 0:
-        print(f"\n⚠️  {result['summary'].p1} P1 finding(s) detected!")
+        print(f"\n[WARN] {result['summary'].p1} P1 finding(s) detected!")
         sys.exit(1)
 
 

@@ -8,7 +8,14 @@
       "exposure": 9,
       "control_effectiveness": 2,
       "data_sensitivity": 8,
-      "url": "http://juiceshop:3000"
+      "url": "http://juiceshop:3000",
+      "github_repo": "",
+      "scanners": {
+        "nuclei": "http://juiceshop:3000",
+        "zap": "http://juiceshop:3000",
+        "trivy": "bkimminich/juice-shop:latest",
+        "wapiti": "http://juiceshop:3000"
+      }
     },
     "nodegoat": {
       "display_name": "NodeGoat",
@@ -18,7 +25,14 @@
       "exposure": 8,
       "control_effectiveness": 3,
       "data_sensitivity": 6,
-      "url": "http://nodegoat:4000"
+      "url": "http://nodegoat:4000",
+      "github_repo": "",
+      "scanners": {
+        "nuclei": "http://nodegoat:4000",
+        "zap": "http://nodegoat:4000",
+        "trivy": "securecodebox/demo-target-nodegoat:latest",
+        "wapiti": "http://nodegoat:4000"
+      }
     },
     "bwapp": {
       "display_name": "bWAPP",
@@ -28,7 +42,14 @@
       "exposure": 7,
       "control_effectiveness": 4,
       "data_sensitivity": 5,
-      "url": "http://bwapp:80"
+      "url": "http://bwapp:80",
+      "github_repo": "",
+      "scanners": {
+        "nuclei": "http://bwapp:80",
+        "zap": "http://bwapp:80",
+        "trivy": "raesene/bwapp:latest",
+        "wapiti": "http://bwapp:80"
+      }
     }
   },
   "scoring": {
@@ -43,19 +64,45 @@
       "patch": 5
     },
     "sla_bands": [
-      {"min": 90, "priority": "P1", "sla_hours": 24},
-      {"min": 70, "priority": "P2", "sla_hours": 72},
-      {"min": 40, "priority": "P3", "sla_hours": 168},
-      {"min": 0, "priority": "P4", "sla_hours": 720}
+      {
+        "min": 90,
+        "priority": "P1",
+        "sla_hours": 24
+      },
+      {
+        "min": 70,
+        "priority": "P2",
+        "sla_hours": 72
+      },
+      {
+        "min": 40,
+        "priority": "P3",
+        "sla_hours": 168
+      },
+      {
+        "min": 0,
+        "priority": "P4",
+        "sla_hours": 720
+      }
     ]
   },
   "filter": {
-    "drop_severity": ["info"],
+    "drop_severity": [
+      "info"
+    ],
     "fp_patterns": [
-      "swagger", "backup file", "server header", "user agent",
-      "cookie without httponly", "cookie without secure",
-      "x-content-type-options", "x-frame-options", "x-xss-protection",
-      "hsts", "content security policy", "cross-domain"
+      "swagger",
+      "backup file",
+      "server header",
+      "user agent",
+      "cookie without httponly",
+      "cookie without secure",
+      "x-content-type-options",
+      "x-frame-options",
+      "x-xss-protection",
+      "hsts",
+      "content security policy",
+      "cross-domain"
     ],
     "risk_accept": []
   },
@@ -75,6 +122,9 @@
     "top_n": 25,
     "ticket_threshold": 60,
     "auto_ticket": true,
-    "github_labels": ["security", "auto-generated"]
+    "github_labels": [
+      "security",
+      "auto-generated"
+    ]
   }
 }
