@@ -237,7 +237,7 @@ def findings_to_defectdojo(findings: List[Finding], engagement_name: str = "") -
     """Convert findings to DefectDojo bulk import format."""
     return {
         "engagement": {
-            "name": engagement_name or f"Pipeline Run {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}",
+            "name": engagement_name or f"Pipeline Run {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')}",
         },
         "findings": [finding_to_defectdojo(f) for f in findings if f.status == "active"],
     }

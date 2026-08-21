@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 import tempfile
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -53,21 +53,21 @@ class TestSLACalculation:
         assert "2026-08-22" in deadline
 
     def test_sla_not_breached(self):
-        future = (datetime.utcnow() + timedelta(hours=10)).isoformat()
+        future = (datetime.now(timezone.utc) + timedelta(hours=10)).isoformat()
         assert not is_sla_breached(future)
 
     def test_sla_breached(self):
-        past = (datetime.utcnow() - timedelta(hours=10)).isoformat()
+        past = (datetime.now(timezone.utc) - timedelta(hours=10)).isoformat()
         assert is_sla_breached(past)
 
     def test_sla_remaining_positive(self):
-        future = (datetime.utcnow() + timedelta(hours=10)).isoformat()
+        future = (datetime.now(timezone.utc) + timedelta(hours=10)).isoformat()
         remaining = sla_remaining_hours(future)
         assert remaining is not None
         assert 9 < remaining < 11
 
     def test_sla_remaining_negative(self):
-        past = (datetime.utcnow() - timedelta(hours=5)).isoformat()
+        past = (datetime.now(timezone.utc) - timedelta(hours=5)).isoformat()
         remaining = sla_remaining_hours(past)
         assert remaining is not None
         assert remaining < 0

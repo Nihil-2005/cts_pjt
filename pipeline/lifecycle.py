@@ -15,7 +15,7 @@ import os
 import sqlite3
 import time
 from dataclasses import dataclass, field, asdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from .models import Finding
@@ -76,13 +76,20 @@ DEFAULT_SLA_BANDS = [
 def calculate_sla_deadline(score: float, sla_hours: int, run_date: str = "") -> str:
     """Calculate when SLA breaches for a finding."""
     if not run_date:
-        run_date = datetime.utcnow().isoformat()
+        run_date = datetime.now(timezone.utc).isoformat()
     try:
         base = datetime.fromisoformat(run_date.replace("Z", "+00:00"))
     except (ValueError, TypeError):
-        base = datetime.utcnow()
+        base = datetime.now(timezone.utc)
     deadline = base + timedelta(hours=sla_hours)
     return deadline.isoformat()
+
+
+def _ensure_utc(dt: datetime) -> datetime:
+    """Ensure a datetime is timezone-aware (UTC). Treats naive datetimes as UTC."""
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
 
 
 def is_sla_breached(sla_deadline: str) -> bool:
@@ -91,7 +98,7 @@ def is_sla_breached(sla_deadline: str) -> bool:
         return False
     try:
         deadline = datetime.fromisoformat(sla_deadline.replace("Z", "+00:00"))
-        return datetime.utcnow() > deadline
+        return datetime.now(timezone.utc) > _ensure_utc(deadline)
     except (ValueError, TypeError):
         return False
 
@@ -102,7 +109,7 @@ def sla_remaining_hours(sla_deadline: str) -> Optional[float]:
         return None
     try:
         deadline = datetime.fromisoformat(sla_deadline.replace("Z", "+00:00"))
-        delta = deadline - datetime.utcnow()
+        delta = _ensure_utc(deadline) - datetime.now(timezone.utc)
         return delta.total_seconds() / 3600
     except (ValueError, TypeError):
         return None
@@ -191,7 +198,7 @@ class LifecycleManager:
         """
         fid = self._finding_id(finding)
         existing = self.get_tracked(fid)
-        now = run_date or datetime.utcnow().isoformat()
+        now = run_date or datetime.now(timezone.utc).isoformat()
 
         if existing:
             # Update existing finding
@@ -255,7 +262,7 @@ class LifecycleManager:
         if new_status not in allowed:
             return False
 
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         tracked.transitions.append({
             "from": tracked.status,
             "to": new_status,

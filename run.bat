@@ -1,47 +1,26 @@
 @echo off
-title DevSecOps Risk Intelligence Pipeline
 echo.
 echo ============================================================
-echo   DevSecOps Risk Intelligence Pipeline — One-Command Launch
+echo   DevSecOps Risk Intelligence Pipeline — Quick Start
 echo ============================================================
 echo.
 
-:: Find Git Bash
-set "BASH="
-where git >nul 2>&1 && (
-    for /f "tokens=*" %%i in ('where git') do (
-        set "GITDIR=%%~dpi"
-        set "BASH=!GITDIR!bin\bash.exe"
-        goto :found
+REM Check for Git Bash
+where bash >nul 2>&1
+if %errorlevel% equ 0 (
+    echo Starting setup via bash...
+    bash setup_and_run.sh
+) else (
+    echo Git Bash not found. Starting server directly...
+    echo.
+    if exist venv\Scripts\activate (
+        call venv\Scripts\activate
     )
+    python -m pipeline.server
 )
 
-:found
-:: Try common Git Bash locations
-if exist "C:\Program Files\Git\bin\bash.exe" set "BASH=C:\Program Files\Git\bin\bash.exe"
-if exist "C:\Program Files (x86)\Git\bin\bash.exe" set "BASH=C:\Program Files (x86)\Git\bin\bash.exe"
-
-if "%BASH%"=="" (
-    echo [X] Git Bash not found!
-    echo     Install Git for Windows from https://git-scm.com/download/win
-    echo     Then re-run this file.
-    pause
-    exit /b 1
-)
-
-echo [*] Found Git Bash: %BASH%
-echo [*] Starting full pipeline setup...
 echo.
-
-:: Get the directory of this batch file
-set "SCRIPT_DIR=%~dp0"
-
-:: Run the bash script
-"%BASH%" "%SCRIPT_DIR%setup_and_run.sh"
-
+echo Dashboard: http://localhost:8000
+echo Login:     admin / admin
 echo.
-echo ============================================================
-echo   Done! Dashboard should be opening in your browser.
-echo   Or open http://localhost:8000 manually.
-echo ============================================================
 pause

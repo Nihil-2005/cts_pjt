@@ -30,7 +30,7 @@
       "scanners": {
         "nuclei": "http://nodegoat:4000",
         "zap": "http://nodegoat:4000",
-        "trivy": "securecodebox/demo-target-nodegoat:latest",
+        "trivy": "nodegoat-web:latest",
         "wapiti": "http://nodegoat:4000"
       }
     },

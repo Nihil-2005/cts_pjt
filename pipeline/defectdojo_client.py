@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
@@ -98,7 +98,7 @@ class DefectDojoClient:
         if not self.configured:
             return None
 
-        now = target_start or datetime.utcnow().strftime("%Y-%m-%d")
+        now = target_start or datetime.now(timezone.utc).strftime("%Y-%m-%d")
         end = target_end or now
 
         resp = self._api("POST", "engagements/", json={
@@ -301,7 +301,7 @@ def import_to_defectdojo(
         return {"configured": True, "error": "Failed to create/get product"}
 
     # Create engagement
-    eng_name = engagement_name or f"Pipeline Run {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}"
+    eng_name = engagement_name or f"Pipeline Run {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')}"
     engagement_id = client.create_engagement(eng_name, product_id)
     if not engagement_id:
         return {"configured": True, "error": "Failed to create engagement"}

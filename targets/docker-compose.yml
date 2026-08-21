@@ -4,6 +4,14 @@ services:
     container_name: nodegoat-mongo
     ports:
       - "27017:27017"
+    volumes:
+      - nodegoat-mongo-data:/data/db
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   nodegoat:
     image: nodegoat-web:latest
@@ -14,20 +22,18 @@ services:
       - NODE_ENV=development
       - MONGODB_URI=mongodb://nodegoat-mongo:27017/nodegoat
     depends_on:
-      - nodegoat-mongo
+      nodegoat-mongo:
+        condition: service_healthy
     working_dir: /home/node/app
     command: node server.js
+    restart: unless-stopped
 
   juiceshop:
     image: bkimminich/juice-shop:latest
     container_name: juiceshop
     ports:
       - "3000:3000"
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+    restart: unless-stopped
 
   bwapp:
     image: raesene/bwapp:latest
@@ -36,8 +42,7 @@ services:
       - "80:80"
     environment:
       - MYSQL_ROOT_PASSWORD=bug
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost/install.php"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
+    restart: unless-stopped
+
+volumes:
+  nodegoat-mongo-data:
