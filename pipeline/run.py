@@ -73,7 +73,7 @@ def run_pipeline(
     dedup_result = dedup.deduplicate(findings, fuzzy=config.dedup_cfg.get("fuzzy_title", False))
     findings = dedup_result["findings"]
     metrics = dedup_result["metrics"]
-    print(f"  Raw: {metrics['raw']} → Unique: {metrics['unique']} (dedup: {metrics['dedup_pct']}%)")
+    print(f"  Raw: {metrics['raw']} -> Unique: {metrics['unique']} (dedup: {metrics['dedup_pct']}%)")
 
     # ── Stage 3: Filtering (Auditable) ────────────────────────────────────
     print("\n" + "=" * 60)
@@ -241,7 +241,22 @@ def run_pipeline(
     history_map = hist.all_history()
     hist.close()
 
-    # Dashboard
+    # Lifecycle tracking (MUST run before dashboard build so data is in DB)
+    from . import lifecycle
+    lc = lifecycle.LifecycleManager(os.path.join(out_dir, "lifecycle.db"))
+    for product in summary.products:
+        pf = [f for f in active if f.product == product]
+        pscores = [f.score or 0 for f in pf]
+        lc.record_engagement(
+            run_date=run_date, product=product,
+            current_findings=pf,
+            summary_stats={"avg_score": round(sum(pscores) / len(pscores), 1) if pscores else 0.0},
+        )
+        for f in pf:
+            lc.upsert_finding(f, run_date=run_date)
+    lc.close()
+
+    # Dashboard (reads lifecycle data from DB)
     quarantine_list = [f for f in findings if f.status == "quarantined"]
     dashboard.build_dashboard(
         os.path.join(out_dir, "risk_dashboard.html"),
@@ -262,19 +277,6 @@ def run_pipeline(
     # DefectDojo import format
     sarif_export.write_defectdojo(
         os.path.join(out_dir, "defectdojo_import.json"), ranked)
-
-    # Lifecycle tracking
-    from . import lifecycle
-    lc = lifecycle.LifecycleManager(os.path.join(out_dir, "lifecycle.db"))
-    for product in summary.products:
-        pf = [f for f in active if f.product == product]
-        pscores = [f.score or 0 for f in pf]
-        lc.record_engagement(
-            run_date=run_date, product=product,
-            current_findings=pf,
-            summary_stats={"avg_score": round(sum(pscores) / len(pscores), 1) if pscores else 0.0},
-        )
-    lc.close()
 
     print(f"\n{'=' * 60}")
     print("[DONE] PIPELINE COMPLETE")

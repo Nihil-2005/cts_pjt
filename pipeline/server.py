@@ -452,6 +452,84 @@ async def lifecycle_transition(finding_id: str, status: str, reason: str = "", u
     return {"status": status, "finding_id": finding_id}
 
 
+# ─── API Key Management ────────────────────────────────────────────────────
+
+class ApiKeysUpdate(BaseModel):
+    groq_api_key: Optional[str] = None
+    nvd_api_key: Optional[str] = None
+    github_token: Optional[str] = None
+    jira_url: Optional[str] = None
+    jira_user: Optional[str] = None
+    jira_token: Optional[str] = None
+    jira_project: Optional[str] = None
+    defectdojo_url: Optional[str] = None
+    defectdojo_api_key: Optional[str] = None
+
+
+@app.get("/api/config/keys")
+async def get_config_keys(user: str = Depends(get_current_user)):
+    """Get API key configuration (masked)."""
+    env_path = ".env"
+    keys = {}
+    if os.path.exists(env_path):
+        with open(env_path) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    k = k.strip()
+                    # Mask sensitive values
+                    if v.strip() and len(v.strip()) > 4:
+                        keys[k] = v.strip()[:4] + "*" * (len(v.strip()) - 4)
+                    else:
+                        keys[k] = v.strip() if v.strip() else ""
+    return {"keys": keys}
+
+
+@app.post("/api/config/keys")
+async def update_config_keys(req: ApiKeysUpdate, user: str = Depends(get_current_user)):
+    """Update API key configuration."""
+    env_path = ".env"
+    existing = {}
+    if os.path.exists(env_path):
+        with open(env_path) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    existing[k.strip()] = v.strip()
+
+    # Update only provided keys
+    updates = req.dict(exclude_none=True)
+    for k, v in updates.items():
+        env_key = k.upper()
+        if v:  # Only update if value is non-empty
+            existing[env_key] = v
+
+    # Write back
+    with open(env_path, "w") as f:
+        for k, v in existing.items():
+            f.write(f"{k}={v}\n")
+
+    return {"status": "updated", "keys_updated": list(updates.keys())}
+
+
+@app.get("/api/config")
+async def get_config(user: str = Depends(get_current_user)):
+    """Get full config (products, scoring, etc.)."""
+    cfg = _load_config()
+    return cfg._data
+
+
+@app.post("/api/config")
+async def update_config(data: dict, user: str = Depends(get_current_user)):
+    """Update config."""
+    cfg = _load_config()
+    cfg._data.update(data)
+    _save_config(cfg)
+    return {"status": "updated"}
+
+
 # ─── Export routes ─────────────────────────────────────────────────────────
 
 @app.get("/api/exports/sarif")
