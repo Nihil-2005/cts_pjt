@@ -157,39 +157,44 @@ for NAME in "juiceshop" "bwapp" "nodegoat"; do
     fi
 done
 
-# ── Wapiti ──────────────────────────────────────────────────────────────────
+# ── Wapiti (Docker-based, like all other scanners) ──────────────────────────
 header "Wapiti Scanner"
-if command -v wapiti &> /dev/null || $PYTHON -c "import wapiti3" 2>/dev/null; then
+WAPITI_IMAGE="vulnlab/wapiti:latest"
+
+# Check if Docker image exists
+if docker image inspect "$WAPITI_IMAGE" &>/dev/null; then
     for target_name in "${ALL_TARGETS[@]}"; do
         NAME="${target_name%%:*}"
         PORT="${target_name##*:}"
-        URL="http://localhost:$PORT"
+        URL="http://host.docker.internal:$PORT"
         OUTPUT="$SCAN_DIR/${NAME}_wapiti.json"
 
-        # Wapiti doesn't work well with bWAPP
-        if [ "$NAME" = "bwapp" ]; then
-            warn "Wapiti: skipping bWAPP (compatibility issue)"
-            continue
-        fi
-
-        if ! curl -s -o /dev/null -w "" "$URL" 2>/dev/null; then
-            warn "$NAME ($URL) not reachable — skipping"
+        if ! curl -s -o /dev/null -w "" "http://localhost:$PORT" 2>/dev/null; then
+            warn "$NAME (localhost:$PORT) not reachable — skipping"
             FAILED=$((FAILED + 1))
             continue
         fi
 
-        info "Scanning $NAME ($URL)..."
-        wapiti -u "$URL" -f json -o "$OUTPUT" --flush-attacks --flush-session 2>/dev/null || $PYTHON -m wapiti3 -u "$URL" -f json -o "$OUTPUT" --flush-attacks --flush-session 2>/dev/null || true
+        info "Scanning $NAME (http://localhost:$PORT)..."
+        docker rm -f "scanner-wapiti-$NAME" 2>/dev/null || true
+        docker run --rm --name "scanner-wapiti-$NAME" \
+            --add-host=host.docker.internal:host-gateway \
+            -v "$SCAN_DIR":/out \
+            "$WAPITI_IMAGE" \
+            wapiti -u "$URL" -f json -o "/out/${NAME}_wapiti.json" \
+            --max-depth 2 --flush-attacks --flush-session 2>/dev/null || true
 
         if [ -f "$OUTPUT" ] && [ "$(wc -c < "$OUTPUT" 2>/dev/null || echo 0)" -gt 10 ]; then
             success "Wapiti -> $NAME: report generated"
             TOTAL=$((TOTAL + 1))
         else
             warn "Wapiti -> $NAME: empty report"
+            FAILED=$((FAILED + 1))
         fi
     done
 else
-    warn "Wapiti not installed — skipping"
+    warn "Wapiti Docker image not found ($WAPITI_IMAGE) — pulling..."
+    docker pull "$WAPITI_IMAGE" && success "Wapiti image pulled" || warn "Failed to pull Wapiti image"
 fi
 
 # ── Summary ─────────────────────────────────────────────────────────────────

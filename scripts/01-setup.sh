@@ -52,11 +52,12 @@ else
     success "All dependencies installed"
 fi
 
-if command -v wapiti &> /dev/null || python -c "import wapiti3" 2>/dev/null; then
-    warn "Wapiti scanner already installed"
+# Wapiti runs via Docker (vulnlab/wapiti:latest) — no local install needed
+if docker image inspect vulnlab/wapiti:latest &>/dev/null; then
+    warn "Wapiti Docker image already present"
 else
-    info "Installing Wapiti scanner..."
-    pip install wapiti3 --quiet 2>/dev/null || warn "Wapiti install failed"
+    info "Pulling Wapiti Docker image..."
+    docker pull vulnlab/wapiti:latest --quiet 2>/dev/null || warn "Wapiti pull failed (will retry at scan time)"
 fi
 success "Dependencies ready"
 
