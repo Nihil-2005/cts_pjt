@@ -678,7 +678,32 @@ async def serve_dashboard():
 @app.get("/api/health")
 async def api_health():
     """Health check endpoint (no auth required)."""
-    return {"status": "ok", "version": "2.0.0"}
+    port = int(os.environ.get("PORT", "8000"))
+    local_ip = _get_local_ip()
+    return {
+        "status": "ok",
+        "version": "2.0.0",
+        "host": "0.0.0.0",
+        "port": port,
+        "urls": {
+            "local": f"http://localhost:{port}",
+            "network": f"http://{local_ip}:{port}",
+            "api_docs": f"http://localhost:{port}/docs",
+            "websocket": f"ws://localhost:{port}/ws/live",
+        },
+        "ports": {
+            "inbound": {
+                f"{port}/tcp": "Dashboard + REST API + WebSocket",
+            },
+            "outbound": {
+                "27017/tcp": "MongoDB (NodeGoat database)",
+                "3000/tcp": "Juice Shop (target app)",
+                "4000/tcp": "NodeGoat (target app)",
+                "8080/tcp": "bWAPP (target app)",
+                "443/tcp": "CDN / API calls (EPSS, NVD, Exploit-DB, Groq AI)",
+            },
+        },
+    }
 
 
 # ─── Login page HTML ─────────────────────────────────────────────────────────
@@ -767,15 +792,47 @@ document.getElementById('login-form').addEventListener('submit', async(e)=>{
 
 # ─── Entry point ─────────────────────────────────────────────────────────────
 
+def _get_local_ip():
+    """Get the LAN IP address for network access."""
+    import socket
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
+
+
 def main():
     """Run the server."""
     import uvicorn
     port = int(os.environ.get("PORT", "8000"))
-    print(f"")
-    print(f"  DevSecOps Risk Intelligence Dashboard")
-    print(f"  Server starting on http://0.0.0.0:{port}")
+    local_ip = _get_local_ip()
+    print("")
+    print("  " + "=" * 56)
+    print("  DevSecOps Risk Intelligence Dashboard v2.0")
+    print("  " + "=" * 56)
+    print("")
+    print("  INBOUND PORTS (what the server listens on):")
+    print(f"    {port}/tcp   HTTP  Dashboard + REST API + WebSocket")
+    print("")
+    print("  OUTBOUND PORTS (what the server connects to):")
+    print(f"    27017/tcp MongoDB          (NodeGoat database)")
+    print(f"    3000/tcp  Juice Shop       (target app)")
+    print(f"    4000/tcp  NodeGoat          (target app)")
+    print(f"    8080/tcp  bWAPP             (target app)")
+    print(f"    443/tcp   CDN / API calls   (EPSS, NVD, Exploit-DB, Groq AI)")
+    print("")
+    print("  ACCESS URLS:")
+    print(f"    Local:    http://localhost:{port}")
+    print(f"    Network:  http://{local_ip}:{port}")
+    print(f"    API Docs: http://localhost:{port}/docs")
+    print("")
     print(f"  Login: admin / admin")
-    print(f"")
+    print("  " + "=" * 56)
+    print("")
     uvicorn.run(
         "pipeline.server:app",
         host="0.0.0.0",
