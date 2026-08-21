@@ -576,6 +576,26 @@ async def dedup_analytics(user: str = Depends(get_current_user)):
     }
 
 
+@app.get("/api/lifecycle/all")
+async def lifecycle_all_findings(user: str = Depends(get_current_user)):
+    """Get all findings with lifecycle status."""
+    from .lifecycle import LifecycleManager
+    lc = LifecycleManager("outputs/lifecycle.db")
+    data = lc.get_dashboard_data()
+    lc.close()
+    return data
+
+
+@app.get("/api/lifecycle/breached")
+async def lifecycle_breached(user: str = Depends(get_current_user)):
+    """Get SLA-breached findings."""
+    from .lifecycle import LifecycleManager
+    lc = LifecycleManager("outputs/lifecycle.db")
+    data = lc.get_overdue_summary()
+    lc.close()
+    return data
+
+
 # ─── WebSocket for live updates ──────────────────────────────────────────────
 
 @app.websocket("/ws/live")
