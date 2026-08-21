@@ -39,7 +39,7 @@ services:
     image: raesene/bwapp:latest
     container_name: bwapp
     ports:
-      - "80:80"
+      - "8080:80"
     environment:
       - MYSQL_ROOT_PASSWORD=bug
     restart: unless-stopped

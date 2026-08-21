@@ -42,13 +42,13 @@
       "exposure": 7,
       "control_effectiveness": 4,
       "data_sensitivity": 5,
-      "url": "http://bwapp:80",
+      "url": "http://bwapp:8080",
       "github_repo": "",
       "scanners": {
-        "nuclei": "http://bwapp:80",
-        "zap": "http://bwapp:80",
+        "nuclei": "http://bwapp:8080",
+        "zap": "http://bwapp:8080",
         "trivy": "raesene/bwapp:latest",
-        "wapiti": "http://bwapp:80"
+        "wapiti": "http://bwapp:8080"
       }
     }
   },

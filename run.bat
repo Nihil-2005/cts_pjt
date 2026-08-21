@@ -8,7 +8,8 @@ echo.
 REM Check for Git Bash
 where bash >nul 2>&1
 if %errorlevel% equ 0 (
-    echo Starting setup via bash...
+    echo Starting full pipeline setup...
+    echo.
     bash setup_and_run.sh
 ) else (
     echo Git Bash not found. Starting server directly...
