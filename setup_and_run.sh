@@ -2,8 +2,12 @@
 # ============================================================================
 #  DevSecOps Risk Intelligence Pipeline — One-Command Launcher
 # ============================================================================
-#  Calls individual stage scripts in sequence.
-#  Each script is also runnable independently.
+#  Strict initialization order:
+#    1. Setup environment (venv, deps, API keys)
+#    2. Start Dashboard server FIRST (central state engine)
+#    3. Deploy target apps (Docker)
+#    4. Run scanners (Nuclei + ZAP + Trivy + Wapiti)
+#    5. Process through 8-stage pipeline
 #
 #  Usage:  bash setup_and_run.sh
 # ============================================================================
@@ -24,13 +28,13 @@ SCRIPTS="$SCRIPT_DIR/scripts"
 
 # ── Welcome ─────────────────────────────────────────────────────────────────
 header "DevSecOps Risk Intelligence Pipeline — Full Setup"
-echo "  This will run all 5 stages in sequence:"
+echo "  Strict initialization order:"
 echo ""
-echo "    Stage 1: Setup environment (venv, deps, API keys)"
-echo "    Stage 2: Deploy target apps (Docker)"
-echo "    Stage 3: Run scanners (Nuclei + ZAP + Trivy + Wapiti)"
-echo "    Stage 4: Process through 8-stage pipeline"
-echo "    Stage 5: Open interactive dashboard"
+echo "    1. Setup environment (venv, deps, API keys)"
+echo "    2. Start Dashboard server (central state engine)"
+echo "    3. Deploy target apps (Docker)"
+echo "    4. Run scanners (Nuclei + ZAP + Trivy + Wapiti)"
+echo "    5. Process through 8-stage pipeline"
 echo ""
 echo "  Press ENTER to start, or Ctrl+C to cancel..."
 read -r
@@ -39,18 +43,39 @@ read -r
 header "Stage 1/5: Environment Setup"
 bash "$SCRIPTS/01-setup.sh"
 
-# ── Stage 2: Deploy ────────────────────────────────────────────────────────
-header "Stage 2/5: Deploy Target Apps"
+# ── Stage 2: Dashboard FIRST (central state engine) ────────────────────────
+header "Stage 2/5: Starting Dashboard (Central State Engine)"
+info "Dashboard must be online before anything else..."
+bash "$SCRIPTS/05-dashboard.sh" &
+DASHBOARD_PID=$!
+sleep 3  # Give it a moment to bind
+
+# Verify dashboard is up
+if curl -s http://localhost:8000/api/health > /dev/null 2>&1; then
+    success "Dashboard is online at http://localhost:8000"
+else
+    warn "Dashboard may still be starting (check http://localhost:8000)"
+fi
+
+# ── Stage 3: Deploy ────────────────────────────────────────────────────────
+header "Stage 3/5: Deploy Target Apps"
 bash "$SCRIPTS/02-deploy.sh"
 
-# ── Stage 3: Scan ──────────────────────────────────────────────────────────
-header "Stage 3/5: Running Scanners"
+# ── Stage 4: Scan ──────────────────────────────────────────────────────────
+header "Stage 4/5: Running Scanners"
 bash "$SCRIPTS/03-scan.sh"
 
-# ── Stage 4: Pipeline ──────────────────────────────────────────────────────
-header "Stage 4/5: Running Pipeline"
+# ── Stage 5: Pipeline ──────────────────────────────────────────────────────
+header "Stage 5/5: Running Pipeline"
 bash "$SCRIPTS/04-pipeline.sh"
 
-# ── Stage 5: Dashboard ─────────────────────────────────────────────────────
-header "Stage 5/5: Starting Dashboard"
-bash "$SCRIPTS/05-dashboard.sh"
+# ── Done ───────────────────────────────────────────────────────────────────
+echo ""
+success "All stages complete!"
+info "Dashboard: http://localhost:8000"
+info "Login: admin / admin"
+
+# Keep dashboard running in foreground
+echo ""
+info "Dashboard is running. Press Ctrl+C to stop."
+wait $DASHBOARD_PID 2>/dev/null || true

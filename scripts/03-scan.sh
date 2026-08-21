@@ -26,6 +26,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCAN_DIR="$SCRIPT_DIR/scan_reports"
 mkdir -p "$SCAN_DIR"
 
+# Activate venv if present
+if [ -f "$SCRIPT_DIR/venv/Scripts/activate" ]; then
+    source "$SCRIPT_DIR/venv/Scripts/activate"
+elif [ -f "$SCRIPT_DIR/venv/bin/activate" ]; then
+    source "$SCRIPT_DIR/venv/bin/activate"
+fi
+
+# Find python executable
+PYTHON=$(command -v python3 2>/dev/null || command -v python 2>/dev/null || echo python)
+
 # Clean old reports
 rm -f "$SCAN_DIR"/*.json 2>/dev/null || true
 
@@ -64,7 +74,8 @@ for target_name in "${ALL_TARGETS[@]}"; do
     fi
 
     info "Scanning $NAME ($URL)..."
-    if docker run --rm --network=host \
+    docker rm -f "scanner-nuclei-$NAME" 2>/dev/null || true
+    if docker run --rm --name "scanner-nuclei-$NAME" --network=host \
         projectdiscovery/nuclei:latest \
         -u "$URL" -jsonl -o "/dev/stdout" 2>/dev/null > "$OUTPUT" || true; then
         COUNT=$(wc -l < "$OUTPUT" 2>/dev/null || echo 0)
@@ -95,7 +106,8 @@ for target_name in "${ALL_TARGETS[@]}"; do
     fi
 
     info "Scanning $NAME ($URL)..."
-    docker run --rm --network=host \
+    docker rm -f "scanner-zap-$NAME" 2>/dev/null || true
+    docker run --rm --name "scanner-zap-$NAME" --network=host \
         -v "$SCAN_DIR":/zap/wrk \
         ghcr.io/zaproxy/zaproxy:stable \
         zap-baseline.py -t "$URL" -J "${NAME}_zap.json" || true
@@ -127,7 +139,8 @@ for NAME in "juiceshop" "bwapp" "nodegoat"; do
     OUTPUT="$SCAN_DIR/${NAME}_trivy.json"
 
     info "Scanning image $IMAGE..."
-    docker run --rm \
+    docker rm -f "scanner-trivy-$NAME" 2>/dev/null || true
+    docker run --rm --name "scanner-trivy-$NAME" \
         -v "$SCAN_DIR":/out \
         -v /var/run/docker.sock:/var/run/docker.sock \
         aquasec/trivy:latest \
@@ -146,7 +159,7 @@ done
 
 # ── Wapiti ──────────────────────────────────────────────────────────────────
 header "Wapiti Scanner"
-if command -v wapiti &> /dev/null || python -c "import wapiti3" 2>/dev/null; then
+if command -v wapiti &> /dev/null || $PYTHON -c "import wapiti3" 2>/dev/null; then
     for target_name in "${ALL_TARGETS[@]}"; do
         NAME="${target_name%%:*}"
         PORT="${target_name##*:}"
@@ -166,7 +179,7 @@ if command -v wapiti &> /dev/null || python -c "import wapiti3" 2>/dev/null; the
         fi
 
         info "Scanning $NAME ($URL)..."
-        wapiti -u "$URL" -f json -o "$OUTPUT" --flush-attacks --flush-session 2>/dev/null || true
+        wapiti -u "$URL" -f json -o "$OUTPUT" --flush-attacks --flush-session 2>/dev/null || $PYTHON -m wapiti3 -u "$URL" -f json -o "$OUTPUT" --flush-attacks --flush-session 2>/dev/null || true
 
         if [ -f "$OUTPUT" ] && [ "$(wc -c < "$OUTPUT" 2>/dev/null || echo 0)" -gt 10 ]; then
             success "Wapiti -> $NAME: report generated"

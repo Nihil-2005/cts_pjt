@@ -202,6 +202,8 @@ def run_pipeline(
             (summary.raw_findings - summary.final_findings)
             / max(summary.raw_findings, 1) * 100, 2),
         "dedup_by_pass": metrics["by_pass"],
+        "per_scanner_counts": metrics.get("per_scanner_counts", {}),
+        "cross_scanner_redundancy": metrics.get("cross_scanner_redundancy", []),
         "quarantine_by_rule": summary.quarantine_by_rule,
         "enrich_counts": summary.enrich_counts,
         "attack_paths": total_paths,

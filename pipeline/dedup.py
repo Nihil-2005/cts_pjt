@@ -53,12 +53,20 @@ def _canonical_rank(f: Finding) -> tuple:
 
 
 def deduplicate(findings: List[Finding], fuzzy: bool = False) -> Dict[str, object]:
-    """Returns {findings, metrics}.  Metrics: raw, unique, dedup_pct, by_pass."""
+    """Returns {findings, metrics}.  Metrics: raw, unique, dedup_pct, by_pass,
+    cross_scanner_redundancy, per_scanner_counts."""
+    # Pre-dedup counts per scanner
+    per_scanner = {}
+    for f in findings:
+        per_scanner[f.scanner] = per_scanner.get(f.scanner, 0) + 1
+
     metrics: Dict[str, object] = {
         "raw": len(findings),
         "unique": 0,
         "dedup_pct": 0.0,
         "by_pass": {"cve": 0, "endpoint": 0, "title": 0},
+        "per_scanner_counts": per_scanner,
+        "cross_scanner_redundancy": [],  # filled below
     }
     if not findings:
         return {"findings": findings, "metrics": metrics}
@@ -133,6 +141,29 @@ def deduplicate(findings: List[Finding], fuzzy: bool = False) -> Dict[str, objec
             dup.duplicate_of = _stable_id(canon)
             _merge_into(canon, dup)
             metrics["by_pass"][reason[id(dup)]] += 1  # type: ignore[index]
+
+    # Build cross-scanner redundancy log: which scanners found the same vuln
+    cross_redundancy = []
+    for gid, members in groups.items():
+        if len(members) < 2:
+            continue
+        scanners = sorted(set(m.scanner for m in members))
+        if len(scanners) < 2:
+            continue
+        canonical = members[0]
+        dupes = [m for m in members if m.is_duplicate]
+        cross_redundancy.append({
+            "vulnerability": canonical.title[:80],
+            "product": canonical.product,
+            "cve": canonical.cve,
+            "cwe": canonical.cwe,
+            "endpoint": canonical.endpoint,
+            "scanners_found_it": scanners,
+            "canonical_source": canonical.scanner,
+            "duplicate_sources": [m.scanner for m in dupes],
+            "total_duplicates": len(dupes),
+        })
+    metrics["cross_scanner_redundancy"] = cross_redundancy
 
     unique = [f for f in findings if not f.is_duplicate]
     metrics["unique"] = len(unique)

@@ -8,13 +8,13 @@
       "exposure": 9,
       "control_effectiveness": 2,
       "data_sensitivity": 8,
-      "url": "http://juiceshop:3000",
+      "url": "http://localhost:3000",
       "github_repo": "",
       "scanners": {
-        "nuclei": "http://juiceshop:3000",
-        "zap": "http://juiceshop:3000",
+        "nuclei": "http://localhost:3000",
+        "zap": "http://localhost:3000",
         "trivy": "bkimminich/juice-shop:latest",
-        "wapiti": "http://juiceshop:3000"
+        "wapiti": "http://localhost:3000"
       }
     },
     "nodegoat": {
@@ -25,13 +25,13 @@
       "exposure": 8,
       "control_effectiveness": 3,
       "data_sensitivity": 6,
-      "url": "http://nodegoat:4000",
+      "url": "http://localhost:4000",
       "github_repo": "",
       "scanners": {
-        "nuclei": "http://nodegoat:4000",
-        "zap": "http://nodegoat:4000",
+        "nuclei": "http://localhost:4000",
+        "zap": "http://localhost:4000",
         "trivy": "nodegoat-web:latest",
-        "wapiti": "http://nodegoat:4000"
+        "wapiti": "http://localhost:4000"
       }
     },
     "bwapp": {
@@ -42,13 +42,13 @@
       "exposure": 7,
       "control_effectiveness": 4,
       "data_sensitivity": 5,
-      "url": "http://bwapp:8080",
+      "url": "http://localhost:8080",
       "github_repo": "",
       "scanners": {
-        "nuclei": "http://bwapp:8080",
-        "zap": "http://bwapp:8080",
+        "nuclei": "http://localhost:8080",
+        "zap": "http://localhost:8080",
         "trivy": "raesene/bwapp:latest",
-        "wapiti": "http://bwapp:8080"
+        "wapiti": "http://localhost:8080"
       }
     }
   },

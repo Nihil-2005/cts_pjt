@@ -555,6 +555,27 @@ async def defectdojo_import(product_name: str, user: str = Depends(get_current_u
     return import_to_defectdojo(findings, product_name)
 
 
+# ─── Dedup analytics ────────────────────────────────────────────────────────
+
+@app.get("/api/analytics/dedup")
+async def dedup_analytics(user: str = Depends(get_current_user)):
+    """Get deduplication analytics: pre/post counts, cross-scanner redundancy."""
+    noise_path = "outputs/noise_reduction.json"
+    if not os.path.exists(noise_path):
+        raise HTTPException(status_code=404, detail="Run pipeline first")
+    with open(noise_path) as fh:
+        data = json.load(fh)
+    return {
+        "raw_findings": data.get("raw_findings", 0),
+        "unique_findings": data.get("unique_findings", 0),
+        "dedup_pct": data.get("dedup_pct", 0),
+        "noise_removed_pct": data.get("noise_removed_pct", 0),
+        "per_scanner_counts": data.get("per_scanner_counts", {}),
+        "cross_scanner_redundancy": data.get("cross_scanner_redundancy", []),
+        "dedup_by_pass": data.get("dedup_by_pass", {}),
+    }
+
+
 # ─── WebSocket for live updates ──────────────────────────────────────────────
 
 @app.websocket("/ws/live")

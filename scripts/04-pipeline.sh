@@ -33,8 +33,18 @@ REPORTS_DIR="$SCRIPT_DIR/scan_reports"
 OUTPUT_DIR="$SCRIPT_DIR/outputs"
 CONFIG="$SCRIPT_DIR/config.json"
 
+# Activate venv if present (fixes python: command not found on Windows)
+if [ -f "$SCRIPT_DIR/venv/Scripts/activate" ]; then
+    source "$SCRIPT_DIR/venv/Scripts/activate"
+elif [ -f "$SCRIPT_DIR/venv/bin/activate" ]; then
+    source "$SCRIPT_DIR/venv/bin/activate"
+fi
+
+# Find python executable
+PYTHON=$(command -v python3 2>/dev/null || command -v python 2>/dev/null || echo python)
+
 # Build pipeline command
-CMD="python -m pipeline.run --reports scan_reports/ --config config.json --out outputs/"
+CMD="$PYTHON -m pipeline.run --reports scan_reports/ --config config.json --out outputs/"
 
 # Parse optional arguments
 for arg in "$@"; do
@@ -84,7 +94,7 @@ info "Running: $CMD"
 echo ""
 
 cd "$SCRIPT_DIR"
-python -m pipeline.run \
+$PYTHON -m pipeline.run \
     --reports scan_reports/ \
     --config config.json \
     --out outputs/ \

@@ -162,12 +162,16 @@ class ScannerManager:
         job.image = image
         output_name = f"{job.product}_{job.scanner}.json"
 
+        # Explicit container name for predictable tracking
+        container_name = f"scanner-{job.scanner}-{job.product}"
+
         # Use host.docker.internal for Windows Docker Desktop access to host services
         host_access = target_url.replace("localhost", "host.docker.internal")
 
         if job.scanner == "nuclei":
             return [
                 "docker", "run", "--rm",
+                "--name", container_name,
                 "--add-host=host.docker.internal:host-gateway",
                 "-v", f"{self.reports_dir}:/out",
                 image,
@@ -178,6 +182,7 @@ class ScannerManager:
         elif job.scanner == "zap":
             return [
                 "docker", "run", "--rm",
+                "--name", container_name,
                 "--add-host=host.docker.internal:host-gateway",
                 "-v", f"{self.reports_dir}:/zap/wrk",
                 image,
@@ -191,6 +196,7 @@ class ScannerManager:
                 docker_sock = "//var/run/docker.sock"  # Windows
             return [
                 "docker", "run", "--rm",
+                "--name", container_name,
                 "-v", f"{self.reports_dir}:/out",
                 "-v", f"{docker_sock}:/var/run/docker.sock",
                 image,
@@ -201,6 +207,7 @@ class ScannerManager:
         elif job.scanner == "wapiti":
             return [
                 "docker", "run", "--rm",
+                "--name", container_name,
                 "--add-host=host.docker.internal:host-gateway",
                 "-v", f"{self.reports_dir}:/out",
                 image,
