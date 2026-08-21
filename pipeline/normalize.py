@@ -321,10 +321,28 @@ def _load_json(path: str) -> Any:
     with open(path, "rb") as fh:
         raw = fh.read()
     try:
-        return json.loads(raw.decode("utf-8"))
+        text = raw.decode("utf-8")
     except UnicodeDecodeError:
-        # some scanner exports (e.g. ZAP on Windows) are latin-1/cp1252
-        return json.loads(raw.decode("latin-1"))
+        text = raw.decode("latin-1")
+    text = text.strip()
+    if not text:
+        return []
+    # Try standard JSON first (array or object)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    # Handle JSONL (one JSON object per line) — e.g. nuclei -jsonl output
+    results = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            results.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return results
 
 
 def parse_report_file(path: str, product: str, scanner: Optional[str] = None) -> List[Finding]:

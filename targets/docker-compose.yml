@@ -1,18 +1,22 @@
-version: "3.8"
-
 services:
+  nodegoat-mongo:
+    image: mongo:4.4
+    container_name: nodegoat-mongo
+    ports:
+      - "27017:27017"
+
   nodegoat:
-    image: securecodebox/demo-target-nodegoat:latest
+    image: nodegoat-web:latest
     container_name: nodegoat
     ports:
       - "4000:4000"
     environment:
       - NODE_ENV=development
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:4000"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      - MONGODB_URI=mongodb://nodegoat-mongo:27017/nodegoat
+    depends_on:
+      - nodegoat-mongo
+    working_dir: /home/node/app
+    command: node server.js
 
   juiceshop:
     image: bkimminich/juice-shop:latest

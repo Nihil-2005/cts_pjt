@@ -63,7 +63,7 @@ SCANNER_IMAGES = {
     "nuclei": "projectdiscovery/nuclei:latest",
     "zap": "ghcr.io/zaproxy/zaproxy:stable",
     "trivy": "aquasec/trivy:latest",
-    "wapiti": "vfrfrfr/wapiti:latest",
+    "wapiti": "vulnlab/wapiti:latest",
 }
 
 # Scanner run commands (mounted inside container)
@@ -162,30 +162,37 @@ class ScannerManager:
         job.image = image
         output_name = f"{job.product}_{job.scanner}.json"
 
+        # Use host.docker.internal for Windows Docker Desktop access to host services
+        host_access = target_url.replace("localhost", "host.docker.internal")
+
         if job.scanner == "nuclei":
             return [
                 "docker", "run", "--rm",
-                "--network=host",
+                "--add-host=host.docker.internal:host-gateway",
                 "-v", f"{self.reports_dir}:/out",
                 image,
-                "nuclei", "-u", target_url,
-                "-json", "-o", f"/out/{output_name}",
+                "nuclei", "-u", host_access,
+                "-jsonl", "-o", f"/out/{output_name}",
                 "-silent", "-nc",
             ]
         elif job.scanner == "zap":
             return [
                 "docker", "run", "--rm",
-                "--network=host",
+                "--add-host=host.docker.internal:host-gateway",
                 "-v", f"{self.reports_dir}:/zap/wrk",
                 image,
-                "zap-baseline.py", "-t", target_url,
-                "-J", f"/zap/wrk/{output_name}",
+                "zap-baseline.py", "-t", host_access,
+                "-J", f"{output_name}",
             ]
         elif job.scanner == "trivy":
-            # Trivy scans a Docker image, not a URL
+            # Trivy scans a Docker image — mount Docker socket for host access
+            docker_sock = "/var/run/docker.sock"
+            if not os.path.exists(docker_sock):
+                docker_sock = "//var/run/docker.sock"  # Windows
             return [
                 "docker", "run", "--rm",
                 "-v", f"{self.reports_dir}:/out",
+                "-v", f"{docker_sock}:/var/run/docker.sock",
                 image,
                 "image", "--format", "json",
                 "-o", f"/out/{output_name}",
@@ -194,10 +201,10 @@ class ScannerManager:
         elif job.scanner == "wapiti":
             return [
                 "docker", "run", "--rm",
-                "--network=host",
+                "--add-host=host.docker.internal:host-gateway",
                 "-v", f"{self.reports_dir}:/out",
                 image,
-                "wapiti", "-u", target_url,
+                "wapiti", "-u", host_access,
                 "-f", "json", "-o", f"/out/{output_name}",
                 "--max-depth", "2",
             ]

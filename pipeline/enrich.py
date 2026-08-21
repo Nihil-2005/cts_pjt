@@ -28,8 +28,7 @@ from .models import Finding
 
 USER_AGENT = "devsecops-pipeline/2.0 (+hackathon)"
 EXPLOITDB_CSV_URL = (
-    "https://raw.githubusercontent.com/offensive-security/"
-    "exploitdb/main/files_exploits.csv"
+    "https://gitlab.com/exploit-database/exploitdb/-/raw/main/files_exploits.csv"
 )
 
 

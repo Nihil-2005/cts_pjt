@@ -247,7 +247,7 @@ for target_name in "nodegoat:4000" "juiceshop:3000" "bwapp:80"; do
     info "Scanning $NAME ($URL)..."
     if docker run --rm --network=host \
         projectdiscovery/nuclei:latest \
-        -u "$URL" -json -o "/dev/stdout" 2>/dev/null > "$OUTPUT" || true; then
+        -u "$URL" -jsonl -o "/dev/stdout" 2>/dev/null > "$OUTPUT" || true; then
         success "Nuclei -> $NAME: $(wc -l < "$OUTPUT" 2>/dev/null || echo 0) findings"
         TOTAL_SCANS=$((TOTAL_SCANS + 1))
     else
@@ -269,7 +269,7 @@ for target_name in "nodegoat:4000" "juiceshop:3000" "bwapp:80"; do
     docker run --rm --network=host \
         -v "$SCAN_DIR":/zap/wrk \
         ghcr.io/zaproxy/zaproxy:stable \
-        zap-baseline.py -t "$URL" -J "/zap/wrk/${NAME}_zap.json" -r "/zap/wrk/${NAME}_zap_report.html" || true
+        zap-baseline.py -t "$URL" -J "${NAME}_zap.json" || true
 
     if [ -f "$OUTPUT" ]; then
         success "ZAP -> $NAME: report generated"
@@ -295,6 +295,7 @@ for NAME in "${!TRIVY_TARGETS[@]}"; do
     info "Scanning image $IMAGE..."
     docker run --rm \
         -v "$SCAN_DIR":/out \
+        -v /var/run/docker.sock:/var/run/docker.sock \
         aquasec/trivy:latest \
         image --format json -o "/out/${NAME}_trivy.json" \
         "$IMAGE" || true
@@ -374,7 +375,11 @@ info "Starting FastAPI server on http://localhost:8000 ..."
 info "Opening browser in 3 seconds..."
 
 # Open browser after a short delay
-(sleep 3 && open_browser "http://localhost:8000") &
+(sleep 3 && case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)  cmd.exe /c start "" "http://localhost:8000" 2>/dev/null ;;
+    Darwin*)               open "http://localhost:8000" ;;
+    *)                     xdg-open "http://localhost:8000" 2>/dev/null ;;
+) &
 
 # Start the server (blocks until Ctrl+C)
 echo ""

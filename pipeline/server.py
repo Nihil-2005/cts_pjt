@@ -608,20 +608,36 @@ async def websocket_live(ws: WebSocket):
 # ─── Dashboard static file ──────────────────────────────────────────────────
 
 @app.get("/", response_class=HTMLResponse)
+async def serve_root():
+    """Root route — redirect to login if no token, dashboard otherwise."""
+    return HTMLResponse(_LOGIN_HTML)
+
+
+@app.get("/login", response_class=HTMLResponse)
+async def serve_login():
+    """Login page."""
+    return HTMLResponse(_LOGIN_HTML)
+
+
+@app.get("/home", response_class=HTMLResponse)
+async def serve_home():
+    """Home redirects to dashboard."""
+    return HTMLResponse(_LOGIN_HTML)
+
+
+@app.get("/dashboard", response_class=HTMLResponse)
 async def serve_dashboard():
     """Serve the main dashboard HTML."""
     dashboard_path = Path("outputs/risk_dashboard.html")
     if dashboard_path.exists():
         return FileResponse(str(dashboard_path))
-
-    # Fallback: serve the login page
     return HTMLResponse(_LOGIN_HTML)
 
 
-@app.get("/dashboard", response_class=HTMLResponse)
-async def serve_dashboard_alt():
-    """Alternative route for the dashboard."""
-    return await serve_dashboard()
+@app.get("/api/health")
+async def api_health():
+    """Health check endpoint (no auth required)."""
+    return {"status": "ok", "version": "2.0.0"}
 
 
 # ─── Login page HTML ─────────────────────────────────────────────────────────
