@@ -1089,8 +1089,6 @@ async function saveApiKeys(){
 }
 </script>
 </body>
-</html></script>
-</body>
 </html>"""
 
 
