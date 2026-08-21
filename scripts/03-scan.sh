@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Fix Git Bash / MSYS path conversion (converts /out/ to C:/Program Files/Git/out/)
+export MSYS_NO_PATHCONV=1
+
 # ============================================================================
 #  Stage 3: Run Scanners (Comprehensive)
 #  - Nuclei      — network + web vulnerabilities, CVEs, KEV, exploits
@@ -61,9 +64,6 @@ fi
 
 TOTAL=0; FAILED=0
 
-# Fix Git Bash / MSYS path conversion (converts /out/ to C:/Program Files/Git/out/)
-export MSYS_NO_PATHCONV=1
-
 # ============================================================================
 #  NUCLEI — Comprehensive CVE + KEV + misconfig + exposure scanning
 # ============================================================================
@@ -107,21 +107,19 @@ for target_name in "${ALL_TARGETS[@]}"; do
     info "Scanning $NAME ($URL)..."
     docker rm -f "scanner-nuclei-$NAME" 2>/dev/null || true
 
-    # Comprehensive nuclei scan:
+    # Comprehensive nuclei scan — runs ALL 6831+ templates:
     #  -u URL           = target URL
-    #  -severity        = all non-info severities
-    #  -as              = all template tags (cves, vulnerabilities, misconfigurations,
-    #                      exposures, default-logins, Takeovers, etc.)
     #  -c 25            = 25 concurrent template execution
     #  -rl 150          = rate limit 150 requests/sec
     #  -timeout 10      = 10s per request
     #  -retries 1       = retry failed once
     #  -jsonl           = JSON Lines output (one finding per line)
+    #  NOTE: Do NOT use -as (only runs ~247 matched templates)
+    #        Do NOT use -tags (too restrictive, misses findings)
+    #        Pipeline filter handles noise reduction from info/low findings
     docker run --rm --name "scanner-nuclei-$NAME" --network=host \
         projectdiscovery/nuclei:latest \
         -u "$URL" \
-        -severity critical,high,medium,low \
-        -as \
         -c 25 \
         -rl 150 \
         -timeout 10 \
