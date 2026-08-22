@@ -1,12 +1,9 @@
-"""Stunning dark-theme risk intelligence dashboard.
+"""Risk Intelligence Dashboard — Clean, professional dark theme.
 
 Generates a self-contained HTML file with:
-  - Chart.js 4  — priority donut, severity bar, scanner coverage,
-                   noise waterfall, risk-over-time, EPSS scatter
-  - D3 v7       — interactive force-directed attack-path graph
-  - Vanilla JS  — component-like architecture, animated counters,
-                   searchable/sortable/filterable findings table,
-                   expandable finding cards with AI remediation
+  - Chart.js 4  — horizontal bar charts, line chart
+  - D3 v7       — force-directed attack-path graph
+  - Vanilla JS  — App object architecture, no global pollution
 
 All libraries loaded from cdnjs.cloudflare.com (works offline after
 first browser cache).  Data is injected as a single JSON constant so
@@ -85,7 +82,6 @@ def _serialize_quarantine(findings: List[Finding]) -> List[Dict]:
 
 
 # ─────────────────────────── HTML template ───────────────────────────────────
-# Uses __PLACEHOLDER__ tokens (not f-strings) to avoid escaping every {{ }}.
 
 _HTML_TEMPLATE = r"""<!DOCTYPE html>
 <html lang="en">
@@ -93,555 +89,310 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Risk Intelligence Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js" defer></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js" defer></script>
 <style>
-*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+/* ═══════════════════════ 1. DESIGN TOKENS ═══════════════════════ */
 :root{
-  --bg:#0a0e1a;--bg-elevated:#0f1525;--surface:#131b2e;
-  --surface-hover:#1a2338;--surface-active:#1e2942;
-  --border:rgba(148,163,184,0.08);--border-strong:rgba(148,163,184,0.15);
-  --text-primary:#f1f5f9;--text-secondary:#94a3b8;
-  --text-tertiary:#64748b;--text-muted:#475569;
-  --blue:#60a5fa;--blue-dim:rgba(96,165,250,0.12);
-  --cyan:#22d3ee;--cyan-dim:rgba(34,211,238,0.12);
-  --indigo:#818cf8;--indigo-dim:rgba(129,140,248,0.12);
-  --red:#f87171;--red-dim:rgba(248,113,113,0.12);
-  --red-glow:0 0 20px rgba(248,113,113,0.15);
-  --orange:#fb923c;--orange-dim:rgba(251,146,60,0.12);
-  --yellow:#facc15;--yellow-dim:rgba(250,204,21,0.12);
-  --green:#4ade80;--green-dim:rgba(74,222,128,0.12);
-  --p1-bg:rgba(248,113,113,0.1);--p1-text:#fca5a5;--p1-border:rgba(248,113,113,0.25);
-  --p2-bg:rgba(251,146,60,0.1);--p2-text:#fdba74;--p2-border:rgba(251,146,60,0.25);
-  --p3-bg:rgba(250,204,21,0.1);--p3-text:#fde047;--p3-border:rgba(250,204,21,0.25);
-  --p4-bg:rgba(100,116,139,0.1);--p4-text:#94a3b8;--p4-border:rgba(100,116,139,0.25);
-  --shadow-sm:0 1px 2px rgba(0,0,0,0.3);
-  --shadow-md:0 4px 12px rgba(0,0,0,0.4);
-  --shadow-lg:0 8px 32px rgba(0,0,0,0.5);
-  --radius-sm:6px;--radius:10px;--radius-lg:14px;
-  --font-sans:'Inter',system-ui,-apple-system,sans-serif;
-  --font-mono:'JetBrains Mono','Fira Code',monospace;
-  --transition-fast:150ms ease;--transition-base:250ms ease;
+  --bg-base:#0B0D12;--bg-elevated:#111318;--bg-surface:#16181F;--bg-hover:#1A1D26;
+  --border-subtle:rgba(255,255,255,0.04);--border-default:rgba(255,255,255,0.07);--border-active:rgba(255,255,255,0.12);
+  --text-primary:#E8EAED;--text-secondary:#9CA3AF;--text-tertiary:#6B7280;--text-muted:#4B5563;
+  --risk-critical:#EF4444;--risk-high:#F59E0B;--risk-medium:#EAB308;--risk-low:#22C55E;--risk-info:#3B82F6;--risk-neutral:#6B7280;
+  --space-1:4px;--space-2:8px;--space-3:12px;--space-4:16px;--space-5:20px;--space-6:24px;--space-8:32px;--space-10:40px;--space-12:48px;
+  --font-sans:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;
+  --font-mono:'JetBrains Mono','SF Mono',monospace;
 }
+
+/* ═══════════════════════ 2. RESET & BASE ═══════════════════════ */
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 html{scroll-behavior:smooth}
-body{font-family:var(--font-sans);background:var(--bg);color:var(--text-primary);min-height:100vh;line-height:1.5;-webkit-font-smoothing:antialiased}
-*:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
-@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:0.01ms!important;transition-duration:0.01ms!important}}
+body{font-family:var(--font-sans);background:var(--bg-base);color:var(--text-primary);min-height:100vh;line-height:1.4;-webkit-font-smoothing:antialiased;font-size:0.875rem}
+:focus-visible{outline:2px solid var(--risk-info);outline-offset:2px}
 ::-webkit-scrollbar{width:6px;height:6px}
-::-webkit-scrollbar-track{background:var(--bg)}
-::-webkit-scrollbar-thumb{background:var(--surface-active);border-radius:3px}
+::-webkit-scrollbar-track{background:var(--bg-base)}
+::-webkit-scrollbar-thumb{background:var(--bg-hover);border-radius:3px}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:0.01ms!important;transition-duration:0.01ms!important}}
 
-/* ─── App Header ─── */
-.app-header{position:sticky;top:0;z-index:100;background:rgba(10,14,26,0.85);backdrop-filter:blur(24px) saturate(1.2);border-bottom:1px solid var(--border);padding:0 24px;display:flex;align-items:center;gap:20px;height:60px}
-.header-brand{display:flex;align-items:center;gap:10px;flex-shrink:0}
-.brand-icon{color:var(--blue)}
-.brand-text{display:flex;align-items:baseline;gap:8px}
-.brand-name{font-size:15px;font-weight:700;letter-spacing:-0.3px;color:var(--text-primary)}
-.brand-version{font-size:11px;color:var(--text-muted);font-weight:500}
-.header-meta{display:flex;align-items:center;gap:6px;flex-wrap:wrap;flex:1}
-.meta-pill{font-size:11px;font-weight:500;padding:3px 10px;border-radius:20px;background:var(--surface);color:var(--text-secondary);border:1px solid var(--border);white-space:nowrap}
-.meta-pill.critical{background:var(--red-dim);color:var(--p1-text);border-color:var(--p1-border)}
-.tab-nav{display:flex;gap:2px;margin-left:auto;flex-shrink:0}
-.tab-btn{display:inline-flex;align-items:center;gap:6px;padding:7px 14px;border:none;border-radius:var(--radius-sm);cursor:pointer;font-size:12.5px;font-weight:500;color:var(--text-tertiary);background:transparent;transition:all var(--transition-fast);white-space:nowrap;font-family:var(--font-sans)}
-.tab-btn:hover{color:var(--text-secondary);background:var(--surface)}
-.tab-btn.active{background:var(--blue-dim);color:var(--blue);box-shadow:inset 0 0 0 1px rgba(96,165,250,0.2)}
-.tab-count{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;padding:0 5px;margin-left:4px;background:var(--surface-hover);border-radius:9px;font-size:10px;font-weight:700;color:var(--text-secondary)}
-.tab-btn.active .tab-count{background:rgba(96,165,250,0.2);color:var(--blue)}
-.header-actions{display:flex;gap:6px;flex-shrink:0}
-.icon-btn{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:var(--radius-sm);border:1px solid var(--border);background:var(--surface);color:var(--text-secondary);cursor:pointer;transition:all var(--transition-fast)}
-.icon-btn:hover{background:var(--surface-hover);color:var(--text-primary);border-color:var(--border-strong)}
-
-/* ─── Pages ─── */
-.page{display:none;padding:28px;max-width:1600px;margin:0 auto;animation:fadeIn .3s ease}
+/* ═══════════════════════ 3. LAYOUT ═══════════════════════ */
+.container{max-width:1400px;margin:0 auto;padding:0 var(--space-6)}
+.page{display:none;padding:var(--space-6);max-width:1400px;margin:0 auto}
 .page.active{display:block}
-@keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+.grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:var(--space-4)}
+.grid-2{display:grid;grid-template-columns:repeat(2,1fr);gap:var(--space-4)}
+.gap-4{gap:var(--space-4)}
 
-/* ─── Brief Card ─── */
-.brief-card{background:linear-gradient(135deg,rgba(96,165,250,0.06),rgba(34,211,238,0.06));border:1px solid rgba(96,165,250,0.15);border-radius:var(--radius);padding:20px 24px;margin-bottom:28px;display:flex;gap:16px;align-items:flex-start}
-.brief-icon{flex-shrink:0;margin-top:2px;color:var(--cyan)}
-.brief-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1.2px;color:var(--cyan);margin-bottom:6px}
-.brief-text{font-size:13.5px;line-height:1.7;color:var(--text-secondary)}
+/* ═══════════════════════ 4. COMPONENTS ═══════════════════════ */
 
-/* ─── KPI Cards ─── */
-.kpi-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:16px;margin-bottom:28px}
-.kpi-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px;position:relative;overflow:hidden;transition:border-color var(--transition-base),box-shadow var(--transition-base)}
-.kpi-card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,var(--blue),var(--cyan));opacity:0;transition:opacity var(--transition-base)}
-.kpi-card:hover{border-color:var(--border-strong);box-shadow:var(--shadow-md)}
-.kpi-card:hover::before{opacity:1}
-.kpi-card.danger::before{background:linear-gradient(90deg,var(--red),var(--orange))}
-.kpi-card.danger:hover{box-shadow:var(--red-glow)}
-.kpi-card.success::before{background:linear-gradient(90deg,var(--green),var(--cyan))}
-.kpi-card.warn::before{background:linear-gradient(90deg,var(--orange),var(--yellow))}
-.kpi-header{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:12px}
-.kpi-icon{width:36px;height:36px;border-radius:var(--radius-sm);display:flex;align-items:center;justify-content:center;background:var(--blue-dim);color:var(--blue)}
-.kpi-card.danger .kpi-icon{background:var(--red-dim);color:var(--red)}
-.kpi-card.success .kpi-icon{background:var(--green-dim);color:var(--green)}
-.kpi-card.warn .kpi-icon{background:var(--orange-dim);color:var(--orange)}
-.kpi-value{font-size:32px;font-weight:800;line-height:1;color:var(--text-primary);font-variant-numeric:tabular-nums;letter-spacing:-0.5px}
-.kpi-label{font-size:11px;color:var(--text-tertiary);text-transform:uppercase;letter-spacing:0.8px;font-weight:600;margin-top:8px}
-.kpi-sub{font-size:12px;color:var(--text-muted);margin-top:4px}
+/* --- Header --- */
+.app-header{position:sticky;top:0;z-index:100;background:var(--bg-base);border-bottom:1px solid var(--border-subtle);padding:0 var(--space-6);display:flex;align-items:center;gap:var(--space-4);height:48px}
+.header-brand{display:flex;align-items:center;gap:var(--space-2);flex-shrink:0}
+.header-brand svg{color:var(--risk-info);width:16px;height:16px}
+.header-brand-text{font-size:var(--text-md);font-weight:600;color:var(--text-primary);white-space:nowrap}
+.header-meta{display:flex;align-items:center;gap:var(--space-2);flex:1;overflow:hidden;white-space:nowrap;font-size:var(--text-xs);color:var(--text-tertiary)}
+.header-meta .p1-count{color:var(--risk-critical);font-weight:600}
+.header-meta .p2-count{color:var(--risk-high);font-weight:600}
+.tab-nav{display:flex;gap:2px;overflow-x:auto;flex-shrink:0;scrollbar-width:none}
+.tab-nav::-webkit-scrollbar{display:none}
+.tab-btn{padding:var(--space-2) var(--space-3);border:none;border-radius:4px;cursor:pointer;font-size:var(--text-xs);font-weight:500;color:var(--text-tertiary);background:transparent;transition:color 150ms,border-color 150ms;white-space:nowrap;font-family:var(--font-sans);border-bottom:2px solid transparent}
+.tab-btn:hover{color:var(--text-secondary)}
+.tab-btn.active{color:var(--text-primary);border-bottom-color:var(--risk-info)}
+.header-actions{flex-shrink:0}
 
-/* ─── Chart Cards ─── */
-.chart-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;transition:border-color var(--transition-base)}
-.chart-card:hover{border-color:var(--border-strong)}
-.chart-header{display:flex;align-items:center;gap:8px;padding:16px 20px 0}
-.chart-header svg{color:var(--text-tertiary)}
-.chart-title{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.6px;color:var(--text-secondary)}
-.chart-body{padding:12px 20px 20px;height:240px;position:relative}
-.chart-row-3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:20px}
-.chart-row-2{display:grid;grid-template-columns:repeat(2,1fr);gap:16px;margin-bottom:20px}
-.chart-row-1{margin-bottom:20px}
+/* --- Cards --- */
+.card{background:var(--bg-elevated);border:1px solid var(--border-subtle);border-radius:8px;padding:var(--space-5);transition:border-color 150ms}
+.card:hover{border-color:var(--border-default)}
+.card-header{display:flex;align-items:center;gap:var(--space-2);margin-bottom:var(--space-4);font-size:var(--text-xs);font-weight:500;color:var(--text-secondary)}
 
-/* ─── Table Controls ─── */
-.table-controls{display:flex;gap:10px;margin-bottom:16px;align-items:center;flex-wrap:wrap}
-.search-wrap{position:relative;flex:1;min-width:200px;max-width:360px}
-.search-icon{position:absolute;left:11px;top:50%;transform:translateY(-50%);color:var(--text-muted);pointer-events:none}
-.search-box{width:100%;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--radius-sm);padding:8px 14px 8px 36px;color:var(--text-primary);font-size:13px;font-family:var(--font-sans);transition:border-color var(--transition-fast);outline:none}
-.search-box:focus{border-color:rgba(96,165,250,0.5);box-shadow:0 0 0 3px rgba(96,165,250,0.08)}
-.search-box::placeholder{color:var(--text-muted)}
-.filter-sel{background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--radius-sm);padding:8px 12px;color:var(--text-primary);font-size:12px;font-family:var(--font-sans);cursor:pointer;outline:none;transition:border-color var(--transition-fast)}
-.filter-sel:focus{border-color:rgba(96,165,250,0.5)}
-.filter-sel option{background:var(--surface);color:var(--text-primary)}
-.result-badge{margin-left:auto;font-size:12px;color:var(--text-tertiary);background:var(--surface);padding:5px 12px;border-radius:20px;border:1px solid var(--border);white-space:nowrap}
+/* --- KPI --- */
+.kpi-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:var(--space-4);margin-bottom:var(--space-6)}
+.kpi-value{font-size:var(--text-xl);font-weight:700;line-height:1.2;color:var(--text-primary);font-variant-numeric:tabular-nums}
+.kpi-label{font-size:var(--text-xs);font-weight:500;color:var(--text-secondary);margin-top:var(--space-2)}
+.kpi-sub{font-size:var(--text-xs);color:var(--text-tertiary);margin-top:var(--space-1)}
 
-/* ─── Priority Band Bar ─── */
-.priority-bar{display:flex;gap:16px;align-items:center;padding:12px 16px;margin-bottom:16px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);font-size:12px;flex-wrap:wrap}
-.priority-item{display:flex;align-items:center;gap:6px;color:var(--text-secondary)}
-.priority-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
-.priority-dot.p1{background:var(--red)}
-.priority-dot.p2{background:var(--orange)}
-.priority-dot.p3{background:var(--yellow)}
-.priority-dot.p4{background:var(--text-muted)}
+/* --- Buttons --- */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:var(--space-2);padding:var(--space-2) var(--space-4);border-radius:6px;font-size:var(--text-xs);font-weight:600;font-family:var(--font-sans);cursor:pointer;border:1px solid transparent;transition:all 150ms;text-decoration:none;line-height:1.4}
+.btn-primary{background:var(--risk-info);color:#fff;border-color:var(--risk-info)}
+.btn-primary:hover{background:#2563eb;border-color:#2563eb}
+.btn-secondary{background:var(--bg-surface);color:var(--text-secondary);border-color:var(--border-default)}
+.btn-secondary:hover{background:var(--bg-hover);color:var(--text-primary);border-color:var(--border-active)}
+.btn-sm{padding:var(--space-2) var(--space-3);font-size:var(--text-xs)}
 
-/* ─── Data Table ─── */
-.table-wrap{overflow-x:auto;border-radius:var(--radius);border:1px solid var(--border)}
-.data-table{width:100%;border-collapse:separate;border-spacing:0;font-size:12.5px}
-.data-table thead th{background:var(--bg-elevated);color:var(--text-tertiary);padding:10px 14px;text-align:left;font-weight:600;font-size:10.5px;text-transform:uppercase;letter-spacing:0.5px;white-space:nowrap;user-select:none;border-bottom:1px solid var(--border);cursor:pointer;transition:color var(--transition-fast);position:sticky;top:0;z-index:10}
+/* --- Badges --- */
+.badge{display:inline-flex;align-items:center;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.02em;white-space:nowrap;line-height:1.4}
+.b-p1{background:rgba(239,68,68,0.1);color:var(--risk-critical)}
+.b-p2{background:rgba(245,158,11,0.1);color:var(--risk-high)}
+.b-p3{background:rgba(234,179,8,0.1);color:var(--risk-medium)}
+.b-p4{background:rgba(107,114,128,0.1);color:var(--text-tertiary)}
+.b-critical{background:rgba(239,68,68,0.08);color:var(--risk-critical)}
+.b-high{background:rgba(245,158,11,0.08);color:var(--risk-high)}
+.b-medium{background:rgba(234,179,8,0.08);color:var(--risk-medium)}
+.b-low{background:rgba(34,197,94,0.08);color:var(--risk-low)}
+.b-info-sev{background:rgba(107,114,128,0.08);color:var(--text-secondary)}
+
+/* --- Table --- */
+.table-wrap{overflow-x:auto;border-radius:8px;border:1px solid var(--border-subtle)}
+.data-table{width:100%;border-collapse:separate;border-spacing:0;font-size:var(--text-base)}
+.data-table thead th{background:var(--bg-surface);color:var(--text-tertiary);padding:10px 12px;text-align:left;font-weight:600;font-size:var(--text-xs);white-space:nowrap;user-select:none;border-bottom:1px solid var(--border-subtle);cursor:pointer;position:sticky;top:0;z-index:10}
 .data-table thead th:hover{color:var(--text-secondary)}
-.data-table thead th.sorted{color:var(--blue)}
+.data-table thead th.sorted{color:var(--risk-info)}
 .sort-arrow{font-size:9px;margin-left:3px;opacity:0.5}
-.data-table thead th.sorted .sort-arrow{opacity:1;color:var(--blue)}
-.data-table tbody tr{border-bottom:1px solid rgba(255,255,255,0.03);transition:background var(--transition-fast);cursor:pointer}
-.data-table tbody tr:hover td{background:var(--surface-hover)}
-.data-table tbody tr.expanded td{background:var(--surface-active)}
-.data-table td{padding:10px 14px;vertical-align:middle;color:var(--text-secondary);max-width:240px}
-.data-table td.primary{color:var(--text-primary);font-weight:500}
-.data-table td.no-wrap{white-space:nowrap;max-width:none}
+.data-table thead th.sorted .sort-arrow{opacity:1;color:var(--risk-info)}
+.data-table tbody tr{border-bottom:1px solid var(--border-subtle);transition:background 150ms;cursor:pointer;height:44px}
+.data-table tbody tr:hover td{background:var(--bg-hover)}
+.data-table tbody tr.expanded td{background:var(--bg-surface)}
+.data-table td{padding:10px 12px;vertical-align:middle;color:var(--text-secondary)}
 
-/* ─── Badges ─── */
-.badge{display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:20px;font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;white-space:nowrap}
-.badge::before{content:'';width:5px;height:5px;border-radius:50%;flex-shrink:0}
-.b-p1{background:var(--p1-bg);color:var(--p1-text);border:1px solid var(--p1-border)}.b-p1::before{background:var(--red)}
-.b-p2{background:var(--p2-bg);color:var(--p2-text);border:1px solid var(--p2-border)}.b-p2::before{background:var(--orange)}
-.b-p3{background:var(--p3-bg);color:var(--p3-text);border:1px solid var(--p3-border)}.b-p3::before{background:var(--yellow)}
-.b-p4{background:var(--p4-bg);color:var(--p4-text);border:1px solid var(--p4-border)}.b-p4::before{background:var(--text-muted)}
-.b-critical{background:rgba(248,113,113,0.08);color:var(--red)}.b-critical::before{background:var(--red)}
-.b-high{background:rgba(251,146,60,0.08);color:var(--orange)}.b-high::before{background:var(--orange)}
-.b-medium{background:rgba(250,204,21,0.08);color:var(--yellow)}.b-medium::before{background:var(--yellow)}
-.b-low{background:rgba(74,222,128,0.08);color:var(--green)}.b-low::before{background:var(--green)}
-.b-info{background:rgba(100,116,139,0.08);color:var(--text-secondary)}.b-info::before{background:var(--text-muted)}
-.b-kev{background:var(--red-dim);color:var(--p1-text);border:1px solid var(--p1-border)}.b-kev::before{background:var(--red)}
-.b-exploit{background:var(--orange-dim);color:var(--p2-text);border:1px solid var(--p2-border)}.b-exploit::before{background:var(--orange)}
-.b-epss{background:var(--indigo-dim);color:var(--indigo)}.b-epss::before{background:var(--indigo)}
+/* --- Inputs --- */
+.input{background:var(--bg-surface);border:1px solid var(--border-default);border-radius:6px;padding:8px 12px;color:var(--text-primary);font-size:var(--text-base);font-family:var(--font-sans);outline:none;transition:border-color 150ms;width:100%}
+.input:focus{border-color:var(--risk-info)}
+.input::placeholder{color:var(--text-muted)}
+select.input{cursor:pointer}
+select.input option{background:var(--bg-elevated);color:var(--text-primary)}
+.form-label{font-size:var(--text-xs);font-weight:500;color:var(--text-secondary);margin-bottom:4px;display:block}
 
-/* ─── Score Bar ─── */
-.score-cell{display:flex;align-items:center;gap:10px;min-width:90px}
-.score-num{font-size:13px;font-weight:700;font-family:var(--font-mono);width:32px;text-align:right;flex-shrink:0}
-.score-track{flex:1;height:5px;background:rgba(255,255,255,0.06);border-radius:3px;overflow:hidden;min-width:50px}
-.score-fill{height:100%;border-radius:3px;transition:width .8s cubic-bezier(0.4,0,0.2,1)}
+/* --- Toast --- */
+.toast-container{position:fixed;top:var(--space-4);right:var(--space-4);z-index:1000;display:flex;flex-direction:column;gap:var(--space-2);pointer-events:none}
+.toast{display:flex;align-items:center;gap:var(--space-2);padding:10px 16px;border-radius:8px;background:var(--bg-elevated);border:1px solid var(--border-default);font-size:var(--text-xs);color:var(--text-secondary);pointer-events:auto;max-width:400px;animation:toastIn .2s ease,toastOut .2s ease 4.8s forwards}
+.toast-success{border-color:rgba(34,197,94,0.2)}
+.toast-error{border-color:rgba(239,68,68,0.2)}
+.toast-info{border-color:rgba(59,130,246,0.2)}
+@keyframes toastIn{from{opacity:0;transform:translateX(16px)}to{opacity:1;transform:translateX(0)}}
+@keyframes toastOut{to{opacity:0;transform:translateX(16px)}}
 
-/* ─── Detail Panel ─── */
-.detail-panel{padding:24px;border-top:1px solid var(--border);background:var(--bg-elevated);display:grid;grid-template-columns:repeat(3,1fr);gap:24px}
-.detail-section{margin-bottom:20px}
-.detail-section-title{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--text-muted);margin-bottom:12px;display:flex;align-items:center;gap:6px}
-.detail-row-item{display:flex;gap:8px;margin-bottom:8px;font-size:12.5px;line-height:1.5}
-.detail-key{color:var(--text-tertiary);flex-shrink:0;width:130px;font-size:11px;font-weight:600}
-.detail-val{color:var(--text-secondary);word-break:break-word;font-family:var(--font-mono);font-size:11.5px}
-.detail-val a{color:var(--blue);text-decoration:none}
-.detail-val a:hover{text-decoration:underline}
-.ai-box{grid-column:1/-1;background:linear-gradient(135deg,var(--blue-dim),var(--cyan-dim));border:1px solid rgba(96,165,250,0.15);border-radius:var(--radius);padding:16px 20px}
-.ai-header{display:flex;align-items:center;gap:8px;margin-bottom:10px}
-.ai-header svg{color:var(--blue)}
-.ai-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--blue)}
-.ai-content{font-size:13px;line-height:1.7;color:var(--text-secondary)}
-.rem-list{list-style:none}
-.rem-list li{padding:5px 0;font-size:12px;border-bottom:1px solid var(--border);display:flex;gap:8px;color:var(--text-secondary)}
-.rem-list li:last-child{border:none}
-.rem-kind{font-size:10px;font-weight:600;text-transform:uppercase;color:var(--text-muted);flex-shrink:0;margin-top:1px}
-.cve-link{color:var(--cyan);text-decoration:none;font-family:var(--font-mono);font-size:11.5px}
-.cve-link:hover{text-decoration:underline}
+/* --- Empty State --- */
+.empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:var(--space-10) var(--space-5);text-align:center;color:var(--text-muted)}
+.empty-state-title{font-size:var(--text-base);font-weight:600;color:var(--text-secondary);margin-top:var(--space-3)}
+.empty-state-desc{font-size:var(--text-xs);color:var(--text-tertiary);margin-top:var(--space-1)}
 
-/* ─── Attack Paths ─── */
-#ap-container{position:relative;border-radius:var(--radius);overflow:hidden;background:var(--surface)}
-#ap-svg{display:block;width:100%}
-.ap-legend{display:flex;gap:16px;flex-wrap:wrap;margin-bottom:16px}
-.ap-legend-item{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-secondary)}
-.ap-legend-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
-.ap-tooltip{position:absolute;pointer-events:none;display:none;background:var(--surface-active);border:1px solid var(--border-strong);border-radius:var(--radius-sm);padding:10px 14px;font-size:12px;color:var(--text-primary);max-width:240px;box-shadow:var(--shadow-lg);z-index:10}
-.ap-controls{display:flex;gap:8px;margin-bottom:14px;align-items:center}
-.ap-btn{padding:6px 14px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);color:var(--text-secondary);font-size:12px;cursor:pointer;transition:all var(--transition-fast);font-family:var(--font-sans)}
-.ap-btn:hover{border-color:var(--border-strong);color:var(--text-primary)}
-.ap-product-sel{background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 12px;color:var(--text-primary);font-size:12px;cursor:pointer;font-family:var(--font-sans)}
-.ap-no-data{text-align:center;padding:60px 20px;color:var(--text-muted);font-size:14px}
-
-/* ─── Button Hierarchy ─── */
-.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:10px 18px;border-radius:var(--radius-sm);font-size:13px;font-weight:600;font-family:var(--font-sans);cursor:pointer;border:1px solid transparent;transition:all var(--transition-fast);text-decoration:none}
-.btn-primary{background:var(--blue);color:#fff}
-.btn-primary:hover{background:#3b82f6;box-shadow:0 0 0 3px var(--blue-dim)}
-.btn-secondary{background:var(--surface-hover);color:var(--text-secondary);border-color:var(--border)}
-.btn-secondary:hover{background:var(--surface-active);color:var(--text-primary);border-color:var(--border-strong)}
-.btn-success{background:var(--green);color:#0f172a}
-.btn-success:hover{background:#22c55e}
-.btn-danger{background:var(--red);color:#fff}
-.btn-danger:hover{background:#ef4444}
-.btn-group{display:flex;flex-direction:column;gap:10px}
-.btn-group .btn{justify-content:flex-start;width:100%}
-
-/* ─── Control Center ─── */
-.control-grid{display:grid;grid-template-columns:1fr 1fr;gap:20px}
-.control-section{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px}
-.control-section-title{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text-muted);margin-bottom:16px;display:flex;align-items:center;gap:6px}
-
-/* ─── Quarantine ─── */
-.q-table-wrap{border-radius:var(--radius);border:1px solid var(--border);overflow:hidden}
-.q-note{background:rgba(250,204,21,0.06);border:1px solid rgba(250,204,21,0.15);border-radius:var(--radius);padding:12px 16px;margin-bottom:16px;font-size:13px;color:var(--yellow);display:flex;align-items:center;gap:10px}
-
-/* ─── Toast Notifications ─── */
-.toast-container{position:fixed;top:20px;right:20px;z-index:1000;display:flex;flex-direction:column;gap:8px;pointer-events:none}
-.toast{display:flex;align-items:center;gap:10px;padding:12px 18px;border-radius:var(--radius);background:var(--surface);border:1px solid var(--border);box-shadow:var(--shadow-lg);font-size:13px;color:var(--text-secondary);pointer-events:auto;animation:toastIn 0.3s ease,toastOut 0.3s ease 4.7s forwards;max-width:400px}
-.toast svg{flex-shrink:0}
-.toast-success{border-color:rgba(74,222,128,0.2);background:rgba(74,222,128,0.05)}.toast-success svg{color:var(--green)}
-.toast-error{border-color:rgba(248,113,113,0.2);background:rgba(248,113,113,0.05)}.toast-error svg{color:var(--red)}
-.toast-info{border-color:rgba(96,165,250,0.2);background:rgba(96,165,250,0.05)}.toast-info svg{color:var(--blue)}
-@keyframes toastIn{from{opacity:0;transform:translateX(20px)}to{opacity:1;transform:translateX(0)}}
-@keyframes toastOut{to{opacity:0;transform:translateX(20px)}}
-
-/* ─── Loading / Skeleton ─── */
-.skeleton{background:linear-gradient(90deg,var(--surface) 25%,var(--surface-hover) 50%,var(--surface) 75%);background-size:200% 100%;animation:skeleton 1.5s ease-in-out infinite;border-radius:var(--radius-sm)}
-@keyframes skeleton{0%{background-position:200% 0}100%{background-position:-200% 0}}
-.skeleton-text{height:12px;margin-bottom:8px}
-.skeleton-text.short{width:60%}
-
-/* ─── Empty State ─── */
-.empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:48px 20px;text-align:center;color:var(--text-muted)}
-.empty-state svg{width:48px;height:48px;color:var(--text-muted);opacity:0.3;margin-bottom:16px}
-.empty-state-title{font-size:14px;font-weight:600;color:var(--text-secondary);margin-bottom:6px}
-.empty-state-desc{font-size:13px;color:var(--text-tertiary)}
-
-/* ─── Key Grid ─── */
-.key-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
-.key-field{margin-bottom:10px}
-.key-field label{display:block;font-size:11px;color:var(--text-tertiary);margin-bottom:4px;font-weight:600}
-.key-field input{width:100%;padding:8px 12px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text-primary);font-size:12px;font-family:var(--font-mono);outline:none;transition:border-color var(--transition-fast)}
-.key-field input:focus{border-color:rgba(96,165,250,0.5)}
-
-/* ─── Integration Field Groups ─── */
-.field-group{margin-bottom:20px}
-.field-group label{display:block;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.8px;color:var(--text-tertiary);margin-bottom:8px}
-.field-wrap{display:flex;flex-direction:column;gap:10px}
-
-/* ─── Login Page ─── */
-.login-page{min-height:100vh;display:flex;align-items:center;justify-content:center;background:radial-gradient(ellipse at top,rgba(96,165,250,0.08),transparent 60%),radial-gradient(ellipse at bottom,rgba(34,211,238,0.05),transparent 60%)}
-.login-card{width:100%;max-width:400px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:40px;box-shadow:var(--shadow-lg)}
-.login-brand{display:flex;align-items:center;gap:16px;margin-bottom:32px}
-.login-brand svg{color:var(--blue)}
-.login-brand-name{font-size:20px;font-weight:700;color:var(--text-primary)}
-.login-brand-tagline{font-size:13px;color:var(--text-tertiary);margin-top:2px}
-.login-form .field-group{margin-bottom:20px}
-.input-wrap{display:flex;align-items:center;gap:10px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--radius-sm);padding:0 14px;transition:border-color var(--transition-fast)}
-.input-wrap:focus-within{border-color:var(--blue)}
-.input-wrap svg{color:var(--text-muted);flex-shrink:0}
-.input-wrap input{flex:1;background:transparent;border:none;padding:12px 0;color:var(--text-primary);font-size:14px;outline:none}
-.input-wrap input::placeholder{color:var(--text-muted)}
-.login-btn{width:100%;margin-top:8px}
-.login-error{margin-top:12px;padding:10px 14px;border-radius:var(--radius-sm);background:var(--red-dim);color:var(--p1-text);border:1px solid var(--p1-border);font-size:12px;display:none}
-.login-footer{margin-top:24px;padding-top:20px;border-top:1px solid var(--border);display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text-muted)}
-.login-footer svg{color:var(--green)}
-
-/* ─── Footer ─── */
-.footer{text-align:center;padding:32px;color:var(--text-muted);font-size:12px;border-top:1px solid var(--border);margin-top:40px}
-
-/* ─── Utility ─── */
-.mono{font-family:var(--font-mono)}
-.truncate{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* --- Utility --- */
+.mono{font-family:var(--font-mono);font-variant-numeric:tabular-nums}
+.truncate{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block}
 .dimmed{color:var(--text-muted)}
 
-/* ─── Responsive ─── */
-@media(max-width:1200px){
-  .chart-row-3{grid-template-columns:1fr 1fr}
-  .detail-panel{grid-template-columns:1fr 1fr}
-}
+/* ═══════════════════════ 5. PAGES ═══════════════════════ */
+
+/* --- Findings --- */
+.filter-row{display:flex;gap:var(--space-2);align-items:center;flex-wrap:wrap;margin-bottom:var(--space-4)}
+.filter-row .input{max-width:280px}
+.filter-row select.input{width:140px}
+.result-count{margin-left:auto;font-size:var(--text-xs);color:var(--text-tertiary);white-space:nowrap}
+.score-num{font-family:var(--font-mono);font-weight:600;font-size:13px;font-variant-numeric:tabular-nums}
+.detail-row{display:none}
+.detail-row.open{display:table-row}
+.detail-panel{padding:var(--space-5);background:var(--bg-surface);border-top:1px solid var(--border-subtle);display:grid;grid-template-columns:1fr 1fr;gap:var(--space-6)}
+.detail-section-title{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-muted);margin-bottom:var(--space-3)}
+.detail-row-item{display:flex;gap:var(--space-2);margin-bottom:var(--space-2);font-size:var(--text-xs);line-height:1.5}
+.detail-key{color:var(--text-tertiary);flex-shrink:0;width:120px;font-weight:600}
+.detail-val{color:var(--text-secondary);word-break:break-word}
+.detail-val a{color:var(--risk-info);text-decoration:none}
+.detail-val a:hover{text-decoration:underline}
+.ai-box{grid-column:1/-1;border-left:3px solid var(--risk-info);background:var(--bg-surface);padding:var(--space-4);border-radius:0 6px 6px 0}
+.ai-label{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:var(--risk-info);margin-bottom:var(--space-2)}
+.ai-content{font-size:var(--text-base);line-height:1.7;color:var(--text-secondary)}
+.rem-list{list-style:none}
+.rem-list li{padding:var(--space-1) 0;font-size:var(--text-xs);border-bottom:1px solid var(--border-subtle);display:flex;gap:var(--space-2);color:var(--text-secondary)}
+.rem-list li:last-child{border:none}
+.rem-kind{font-size:10px;font-weight:600;text-transform:uppercase;color:var(--text-muted);flex-shrink:0;margin-top:1px}
+.cve-link{color:var(--risk-info);text-decoration:none;font-family:var(--font-mono);font-size:11px}
+.cve-link:hover{text-decoration:underline}
+
+/* --- Attack Paths --- */
+#ap-container{position:relative;border-radius:8px;overflow:hidden;background:var(--bg-elevated)}
+#ap-svg{display:block;width:100%}
+.ap-legend{display:flex;gap:var(--space-4);margin-bottom:var(--space-4);font-size:var(--text-xs);color:var(--text-secondary)}
+.ap-legend span{display:flex;align-items:center;gap:var(--space-2)}
+.ap-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.ap-tooltip{position:absolute;pointer-events:none;display:none;background:var(--bg-surface);border:1px solid var(--border-default);border-radius:6px;padding:8px 12px;font-size:var(--text-xs);color:var(--text-primary);max-width:220px;z-index:10}
+.ap-controls{display:flex;gap:var(--space-2);align-items:center;margin-bottom:var(--space-3)}
+
+/* --- Quarantine --- */
+.q-note{font-size:var(--text-xs);color:var(--text-tertiary);margin-bottom:var(--space-4)}
+
+/* --- Control --- */
+.control-grid{display:grid;grid-template-columns:1fr 1fr;gap:var(--space-5)}
+.status-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0;display:inline-block}
+
+/* --- Lifecycle --- */
+.lc-summary{font-size:var(--text-xs);color:var(--text-tertiary);margin-bottom:var(--space-4);padding:var(--space-3) 0;border-bottom:1px solid var(--border-subtle)}
+.status-border{border-left:3px solid;padding-left:var(--space-3)}
+
+/* --- Integrations --- */
+.integration-card{margin-bottom:var(--space-4)}
+.integration-card .card-header{justify-content:space-between}
+.integration-fields{display:grid;grid-template-columns:1fr 1fr;gap:var(--space-4);max-width:700px}
+
+/* ═══════════════════════ 6. UTILITIES ═══════════════════════ */
+.text-critical{color:var(--risk-critical)}.text-high{color:var(--risk-high)}.text-medium{color:var(--risk-medium)}.text-low{color:var(--risk-low)}.text-info{color:var(--risk-info)}
+.mb-4{margin-bottom:var(--space-4)}.mb-6{margin-bottom:var(--space-6)}
+
+/* ═══════════════════════ 7. RESPONSIVE ═══════════════════════ */
 @media(max-width:900px){
-  .app-header{flex-wrap:wrap;height:auto;padding:12px 16px;gap:12px}
-  .tab-nav{width:100%;overflow-x:auto;margin-left:0;padding-bottom:4px}
-  .tab-btn{white-space:nowrap}
-  .chart-row-3,.chart-row-2,.control-grid{grid-template-columns:1fr}
+  .app-header{flex-wrap:wrap;height:auto;padding:var(--space-3) var(--space-4);gap:var(--space-2)}
+  .tab-nav{width:100%;overflow-x:auto}
+  .grid-3,.grid-2,.control-grid{grid-template-columns:1fr}
   .detail-panel{grid-template-columns:1fr}
   .kpi-grid{grid-template-columns:repeat(2,1fr)}
-  .page{padding:16px}
+  .page{padding:var(--space-4)}
+  .integration-fields{grid-template-columns:1fr}
 }
 @media(max-width:600px){
   .kpi-grid{grid-template-columns:1fr}
-  .priority-bar{flex-direction:column;align-items:flex-start;gap:8px}
+  .filter-row{flex-direction:column;align-items:stretch}
+  .filter-row .input{max-width:none}
+  .filter-row select.input{width:100%}
 }
 </style>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js" defer></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js" defer></script>
-<!-- Icon Sprite Sheet — Lucide-style icons, 24x24 viewBox -->
-<svg style="display:none">
-  <defs>
-    <symbol id="icon-shield" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
-    <symbol id="icon-target" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="6" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="2" fill="currentColor"/></symbol>
-    <symbol id="icon-zap" viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
-    <symbol id="icon-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8" fill="none" stroke="currentColor" stroke-width="2"/><line x1="21" y1="21" x2="16.65" y2="16.65" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
-    <symbol id="icon-trend-down" viewBox="0 0 24 24"><polyline points="23 18 13.5 8.5 8.5 13.5 1 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><polyline points="17 18 23 18 23 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
-    <symbol id="icon-trend-up" viewBox="0 0 24 24"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><polyline points="17 6 23 6 23 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
-    <symbol id="icon-dice" viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="20" rx="4" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="8" cy="8" r="1.5" fill="currentColor"/><circle cx="16" cy="8" r="1.5" fill="currentColor"/><circle cx="8" cy="16" r="1.5" fill="currentColor"/><circle cx="16" cy="16" r="1.5" fill="currentColor"/></symbol>
-    <symbol id="icon-flame" viewBox="0 0 24 24"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
-    <symbol id="icon-network" viewBox="0 0 24 24"><circle cx="5" cy="6" r="3" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="19" cy="6" r="3" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="18" r="3" fill="none" stroke="currentColor" stroke-width="2"/><line x1="5" y1="9" x2="12" y2="15" stroke="currentColor" stroke-width="2"/><line x1="19" y1="9" x2="12" y2="15" stroke="currentColor" stroke-width="2"/></symbol>
-    <symbol id="icon-alert" viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><line x1="12" y1="9" x2="12" y2="13" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><line x1="12" y1="17" x2="12.01" y2="17" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
-    <symbol id="icon-package" viewBox="0 0 24 24"><line x1="16.5" y1="9.4" x2="7.5" y2="4.21" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><polyline points="3.27 6.96 12 12.01 20.73 6.96" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><line x1="12" y1="22.08" x2="12" y2="12" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
-    <symbol id="icon-rocket" viewBox="0 0 24 24"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 15l-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
-    <symbol id="icon-refresh" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
-    <symbol id="icon-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/><polyline points="12 6 12 12 16 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
-    <symbol id="icon-shuffle" viewBox="0 0 24 24"><polyline points="16 3 21 3 21 8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><line x1="4" y1="20" x2="21" y2="3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><polyline points="21 16 21 21 16 21" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><line x1="15" y1="15" x2="21" y2="21" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><line x1="4" y1="4" x2="9" y2="9" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
-    <symbol id="icon-link" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
-    <symbol id="icon-list" viewBox="0 0 24 24"><line x1="8" y1="6" x2="21" y2="6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><line x1="8" y1="12" x2="21" y2="12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><line x1="8" y1="18" x2="21" y2="18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><line x1="3" y1="6" x2="3.01" y2="6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><line x1="3" y1="12" x2="3.01" y2="12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><line x1="3" y1="18" x2="3.01" y2="18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
-    <symbol id="icon-key" viewBox="0 0 24 24"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
-    <symbol id="icon-ticket" viewBox="0 0 24 24"><path d="M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z" fill="none" stroke="currentColor" stroke-width="2"/><path d="M13 5v2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M13 17v2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M13 11v2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
-    <symbol id="icon-shield-check" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><polyline points="9 12 12 15 17 10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
-    <symbol id="icon-download" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><polyline points="7 10 12 15 17 10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><line x1="12" y1="15" x2="12" y2="3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
-    <symbol id="icon-file-text" viewBox="0 0 24 24"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><polyline points="14 2 14 8 20 8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><line x1="16" y1="13" x2="8" y2="13" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><line x1="16" y1="17" x2="8" y2="17" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><line x1="10" y1="9" x2="8" y2="9" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
-    <symbol id="icon-box" viewBox="0 0 24 24"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
-    <symbol id="icon-activity" viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
-    <symbol id="icon-plus" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><line x1="5" y1="12" x2="19" y2="12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
-    <symbol id="icon-play" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
-    <symbol id="icon-check" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
-    <symbol id="icon-x" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><line x1="6" y1="6" x2="18" y2="18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
-    <symbol id="icon-chevron-down" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
-    <symbol id="icon-external-link" viewBox="0 0 24 24"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><polyline points="15 3 21 3 21 9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><line x1="10" y1="14" x2="21" y2="3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
-    <symbol id="icon-bot" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="5" r="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 7v4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><line x1="8" y1="16" x2="8.01" y2="16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><line x1="16" y1="16" x2="16.01" y2="16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
-    <symbol id="icon-github" viewBox="0 0 24 24"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
-    <symbol id="icon-trash" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
-    <symbol id="icon-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
-    <symbol id="icon-bar-chart" viewBox="0 0 24 24"><line x1="12" y1="20" x2="12" y2="10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><line x1="18" y1="20" x2="18" y2="4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><line x1="6" y1="20" x2="6" y2="16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
-    <symbol id="icon-unlock" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
-    <symbol id="icon-lock" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
-    <symbol id="icon-send" viewBox="0 0 24 24"><line x1="22" y1="2" x2="11" y2="13" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><polygon points="22 2 15 22 11 13 2 9 22 2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
-    <symbol id="icon-download-cloud" viewBox="0 0 24 24"><polyline points="8 17 12 21 16 17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><line x1="12" y1="12" x2="12" y2="21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M20.88 18.09A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.29" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
-    <symbol id="icon-arrow-right" viewBox="0 0 24 24"><line x1="5" y1="12" x2="19" y2="12" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><polyline points="12 5 19 12 12 19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
-  </defs>
-</svg>
-<noscript><style>.page{display:block!important}.page:not(#page-overview){display:none!important}</style></noscript>
 </head>
 <body>
-<!-- Toast container -->
-<div class="toast-container"></div>
 
+<!-- ═══════════════════════ HEADER ═══════════════════════ -->
 <header class="app-header">
   <div class="header-brand">
-    <svg width="28" height="28" class="brand-icon"><use href="#icon-shield"/></svg>
-    <div class="brand-text">
-      <span class="brand-name">RISK INTELLIGENCE</span>
-      <span class="brand-version">v2.0</span>
-    </div>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+    <span class="header-brand-text">Risk Intelligence</span>
   </div>
   <div class="header-meta" id="run-meta"></div>
   <nav class="tab-nav" role="tablist">
-    <button class="tab-btn active" data-page="overview" role="tab" aria-selected="true">
-      <svg width="14" height="14"><use href="#icon-activity"/></svg>
-      Overview
-    </button>
-    <button class="tab-btn" data-page="findings" role="tab">
-      <svg width="14" height="14"><use href="#icon-list"/></svg>
-      Findings
-      <span class="tab-count" id="tc-findings">0</span>
-    </button>
-    <button class="tab-btn" data-page="attackpaths" role="tab">
-      <svg width="14" height="14"><use href="#icon-network"/></svg>
-      Attack Paths
-      <span class="tab-count" id="tc-paths">0</span>
-    </button>
-    <button class="tab-btn" data-page="quarantine" role="tab">
-      <svg width="14" height="14"><use href="#icon-alert"/></svg>
-      Quarantine
-      <span class="tab-count" id="tc-quarantine">0</span>
-    </button>
-    <button class="tab-btn" data-page="products" role="tab">
-      <svg width="14" height="14"><use href="#icon-package"/></svg>
-      Products
-      <span class="tab-count" id="tc-products">0</span>
-    </button>
-    <button class="tab-btn" data-page="control" role="tab">
-      <svg width="14" height="14"><use href="#icon-rocket"/></svg>
-      Control
-    </button>
-    <button class="tab-btn" data-page="lifecycle" role="tab">
-      <svg width="14" height="14"><use href="#icon-refresh"/></svg>
-      Lifecycle
-      <span class="tab-count" id="tc-lifecycle">0</span>
-    </button>
-    <button class="tab-btn" data-page="dedup" role="tab">
-      <svg width="14" height="14"><use href="#icon-shuffle"/></svg>
-      Dedup
-    </button>
-    <button class="tab-btn" data-page="integrations" role="tab">
-      <svg width="14" height="14"><use href="#icon-key"/></svg>
-      Integrations
-    </button>
+    <button class="tab-btn active" data-page="overview" role="tab" aria-selected="true">Overview</button>
+    <button class="tab-btn" data-page="findings" role="tab" aria-selected="false">Findings <span id="tc-findings"></span></button>
+    <button class="tab-btn" data-page="attackpaths" role="tab" aria-selected="false">Attack Paths <span id="tc-paths"></span></button>
+    <button class="tab-btn" data-page="quarantine" role="tab" aria-selected="false">Quarantine <span id="tc-quarantine"></span></button>
+    <button class="tab-btn" data-page="products" role="tab" aria-selected="false">Products <span id="tc-products"></span></button>
+    <button class="tab-btn" data-page="control" role="tab" aria-selected="false">Control</button>
+    <button class="tab-btn" data-page="lifecycle" role="tab" aria-selected="false">Lifecycle <span id="tc-lifecycle"></span></button>
+    <button class="tab-btn" data-page="dedup" role="tab" aria-selected="false">Dedup</button>
+    <button class="tab-btn" data-page="integrations" role="tab" aria-selected="false">Integrations</button>
   </nav>
-  <div class="header-actions">
-    <button class="icon-btn" title="Refresh data" aria-label="Refresh data" onclick="location.reload()">
-      <svg width="16" height="16"><use href="#icon-refresh"/></svg>
-    </button>
-  </div>
 </header>
 
 <!-- ═══════════════════════ OVERVIEW ═══════════════════════ -->
 <main id="page-overview" class="page active" role="tabpanel">
-  <div id="brief-section"></div>
   <div class="kpi-grid" id="kpi-grid"></div>
-  <div class="chart-row-3">
-    <div class="chart-card">
-      <div class="chart-header">
-        <svg width="16" height="16"><use href="#icon-target"/></svg>
-        <span class="chart-title">Priority Distribution</span>
-      </div>
-      <div class="chart-body"><canvas id="c-priority"></canvas></div>
+  <div class="grid-3 mb-6">
+    <div class="card">
+      <div class="card-header">Priority Distribution</div>
+      <div style="height:200px"><canvas id="c-priority"></canvas></div>
     </div>
-    <div class="chart-card">
-      <div class="chart-header">
-        <svg width="16" height="16"><use href="#icon-zap"/></svg>
-        <span class="chart-title">Severity Breakdown</span>
-      </div>
-      <div class="chart-body"><canvas id="c-severity"></canvas></div>
+    <div class="card">
+      <div class="card-header">Severity Breakdown</div>
+      <div style="height:200px"><canvas id="c-severity"></canvas></div>
     </div>
-    <div class="chart-card">
-      <div class="chart-header">
-        <svg width="16" height="16"><use href="#icon-search"/></svg>
-        <span class="chart-title">Scanner Coverage</span>
-      </div>
-      <div class="chart-body"><canvas id="c-scanner"></canvas></div>
+    <div class="card">
+      <div class="card-header">Scanner Coverage</div>
+      <div style="height:200px"><canvas id="c-scanner"></canvas></div>
     </div>
   </div>
-  <div class="chart-row-2">
-    <div class="chart-card">
-      <div class="chart-header">
-        <svg width="16" height="16"><use href="#icon-trend-down"/></svg>
-        <span class="chart-title">Noise Reduction Pipeline</span>
-      </div>
-      <div class="chart-body"><canvas id="c-noise"></canvas></div>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-header">Noise Reduction Pipeline</div>
+      <div style="height:200px"><canvas id="c-noise"></canvas></div>
     </div>
-    <div class="chart-card">
-      <div class="chart-header">
-        <svg width="16" height="16"><use href="#icon-trend-up"/></svg>
-        <span class="chart-title">Risk Over Time</span>
-      </div>
-      <div class="chart-body"><canvas id="c-history"></canvas></div>
-    </div>
-  </div>
-  <div class="chart-row-2">
-    <div class="chart-card">
-      <div class="chart-header">
-        <svg width="16" height="16"><use href="#icon-dice"/></svg>
-        <span class="chart-title">EPSS vs Risk Score</span>
-      </div>
-      <div class="chart-body"><canvas id="c-epss"></canvas></div>
-    </div>
-    <div class="chart-card">
-      <div class="chart-header">
-        <svg width="16" height="16"><use href="#icon-flame"/></svg>
-        <span class="chart-title">Threat Intelligence Coverage</span>
-      </div>
-      <div class="chart-body"><canvas id="c-threat"></canvas></div>
+    <div class="card">
+      <div class="card-header">Risk Over Time</div>
+      <div style="height:200px"><canvas id="c-history"></canvas></div>
     </div>
   </div>
 </main>
 
 <!-- ═══════════════════════ FINDINGS ═══════════════════════ -->
 <main id="page-findings" class="page" role="tabpanel">
-  <div class="priority-bar">
-    <span style="font-weight:600;color:var(--text-secondary)">Priority Bands:</span>
-    <span class="priority-item"><span class="priority-dot p1"></span> P1 Critical (90+) &mdash; fix in 24h</span>
-    <span class="priority-item"><span class="priority-dot p2"></span> P2 High (70-89) &mdash; fix in 3 days</span>
-    <span class="priority-item"><span class="priority-dot p3"></span> P3 Medium (40-69) &mdash; fix in 1 week</span>
-    <span class="priority-item"><span class="priority-dot p4"></span> P4 Low (&lt;40) &mdash; fix in 2 weeks</span>
-  </div>
-  <div class="table-controls">
-    <div class="search-wrap">
-      <svg width="16" height="16" class="search-icon"><use href="#icon-search"/></svg>
-      <input id="tbl-search" class="search-box" placeholder="Search title, CVE, CWE, endpoint...">
-    </div>
-    <select id="f-priority" class="filter-sel"><option value="">All priorities</option></select>
-    <select id="f-severity" class="filter-sel"><option value="">All severities</option></select>
-    <select id="f-scanner" class="filter-sel"><option value="">All scanners</option></select>
-    <select id="f-kev" class="filter-sel"><option value="">KEV filter</option><option value="kev">KEV only</option><option value="exploit">Exploit available</option></select>
-    <button class="btn btn-secondary" style="font-size:12px;padding:7px 14px" onclick="exportCSV()" aria-label="Export findings as CSV">
-      <svg width="14" height="14"><use href="#icon-download"/></svg>
-      Export CSV
-    </button>
-    <span class="result-badge" id="result-badge">&mdash; findings</span>
+  <div class="filter-row">
+    <input id="tbl-search" class="input" placeholder="Search title, CVE, CWE, endpoint...">
+    <select id="f-priority" class="input" style="width:140px"><option value="">All priorities</option></select>
+    <select id="f-severity" class="input" style="width:140px"><option value="">All severities</option></select>
+    <select id="f-scanner" class="input" style="width:140px"><option value="">All scanners</option></select>
+    <select id="f-kev" class="input" style="width:140px"><option value="">KEV filter</option><option value="kev">KEV only</option><option value="exploit">Exploit available</option></select>
+    <button class="btn btn-secondary btn-sm" onclick="App.findings.exportCSV()">Export CSV</button>
+    <span class="result-count" id="result-badge">— findings</span>
   </div>
   <div class="table-wrap"><table class="data-table"><thead id="tbl-head"></thead><tbody id="tbl-body"></tbody></table></div>
 </main>
 
 <!-- ═══════════════════════ ATTACK PATHS ═══════════════════════ -->
 <main id="page-attackpaths" class="page" role="tabpanel">
-  <div class="chart-card">
-    <div class="chart-header">
-      <svg width="16" height="16"><use href="#icon-network"/></svg>
-      <span class="chart-title">Attack Path Graph &mdash; drag nodes, scroll to zoom</span>
+  <div class="card">
+    <div class="card-header">Attack Path Graph</div>
+    <div class="ap-legend">
+      <span><span class="ap-dot" style="background:var(--risk-critical)"></span> High-impact target</span>
+      <span><span class="ap-dot" style="background:var(--risk-info)"></span> Entry point</span>
+      <span><span class="ap-dot" style="background:var(--text-tertiary)"></span> Intermediate</span>
     </div>
-    <div style="padding:12px 20px 0">
-      <div class="ap-legend">
-        <span class="ap-legend-item"><span class="ap-legend-dot" style="background:var(--red);box-shadow:0 0 6px var(--red)"></span>High-impact target</span>
-        <span class="ap-legend-item"><span class="ap-legend-dot" style="background:var(--blue)"></span>Intermediate CWE</span>
-        <span class="ap-legend-item"><span class="ap-legend-dot" style="background:var(--cyan);border-radius:2px;height:3px;width:20px"></span>High-probability path</span>
-      </div>
-      <div class="ap-controls"><select id="ap-product" class="ap-product-sel"></select><button class="ap-btn" onclick="apReset()">Reset zoom</button><span class="dimmed" style="font-size:12px;margin-left:4px">Nodes: CWEs active in this product &middot; edges: escalation probability</span></div>
+    <div class="ap-controls">
+      <select id="ap-product" class="input" style="width:180px"></select>
+      <button class="btn btn-secondary btn-sm" onclick="App.attackPaths.reset()">Reset zoom</button>
     </div>
-    <div id="ap-container" style="margin:0 20px 20px"><svg id="ap-svg" height="540"></svg><div class="ap-tooltip" id="ap-tooltip"></div></div>
+    <div id="ap-container"><svg id="ap-svg" height="480"></svg><div class="ap-tooltip" id="ap-tooltip"></div></div>
   </div>
 </main>
 
 <!-- ═══════════════════════ QUARANTINE ═══════════════════════ -->
 <main id="page-quarantine" class="page" role="tabpanel">
-  <div class="q-note">
-    <svg width="16" height="16" style="flex-shrink:0"><use href="#icon-alert"/></svg>
-    Quarantined findings are never deleted &mdash; they remain auditable below. Rule matches are the exclusion reason.
-  </div>
-  <div class="q-table-wrap"><table class="data-table"><thead><tr><th>Product</th><th>Scanner</th><th>Severity</th><th>Title</th><th>CVE</th><th>Exclusion reason</th></tr></thead><tbody id="q-body"></tbody></table></div>
+  <p class="q-note">Quarantined findings remain auditable. They are excluded from scoring.</p>
+  <div class="table-wrap"><table class="data-table"><thead><tr><th>Product</th><th>Scanner</th><th>Severity</th><th>Title</th><th>CVE</th><th>Reason</th></tr></thead><tbody id="q-body"></tbody></table></div>
 </main>
 
 <!-- ═══════════════════════ PRODUCTS ═══════════════════════ -->
 <main id="page-products" class="page" role="tabpanel">
-  <div class="chart-card" style="margin-bottom:20px;padding:20px">
-    <div class="chart-header" style="padding:0 0 16px">
-      <svg width="16" height="16"><use href="#icon-package"/></svg>
-      <span class="chart-title">Managed Products</span>
-    </div>
+  <div class="card mb-6">
+    <div class="card-header">Managed Products</div>
     <div id="products-table-wrap"></div>
   </div>
-  <div class="chart-card" style="padding:20px">
-    <div class="chart-header" style="padding:0 0 16px">
-      <svg width="16" height="16"><use href="#icon-plus"/></svg>
-      <span class="chart-title">Add New Product</span>
-    </div>
-    <div id="add-product-form" style="display:grid;grid-template-columns:1fr 1fr;gap:16px;max-width:700px">
-      <div class="field-group"><label for="ap-id">Product ID (slug)</label><input id="ap-id" class="search-box" style="width:100%;max-width:none" placeholder="my_custom_app"></div>
-      <div class="field-group"><label for="ap-name">Display Name</label><input id="ap-name" class="search-box" style="width:100%;max-width:none" placeholder="My Custom App"></div>
-      <div class="field-group"><label for="ap-url">Target URL</label><input id="ap-url" class="search-box" style="width:100%;max-width:none" placeholder="https://myapp.com"></div>
-      <div class="field-group"><label for="ap-repo">GitHub Repo (org/name)</label><input id="ap-repo" class="search-box" style="width:100%;max-width:none" placeholder="myorg/myapp"></div>
-      <div class="field-group"><label for="ap-owner">Team Owner</label><input id="ap-owner" class="search-box" style="width:100%;max-width:none" placeholder="appsec-team"></div>
-      <div class="field-group"><label for="ap-crit">Asset Criticality (1-10)</label><input id="ap-crit" type="number" min="1" max="10" value="5" class="search-box" style="width:100%;max-width:none"></div>
-      <div class="field-group"><label for="ap-sens">Data Sensitivity (1-10)</label><input id="ap-sens" type="number" min="1" max="10" value="5" class="search-box" style="width:100%;max-width:none"></div>
-      <div class="field-group"><label for="ap-trivy">Trivy Image (optional)</label><input id="ap-trivy" class="search-box" style="width:100%;max-width:none" placeholder="myorg/myapp:latest"></div>
-      <div style="grid-column:1/-1;display:flex;gap:10px;margin-top:8px">
-        <button class="btn btn-primary" onclick="addProduct()">
-          <svg width="16" height="16"><use href="#icon-check"/></svg>
-          Save Product
-        </button>
-        <span id="ap-msg" style="font-size:12px;color:var(--green);align-self:center"></span>
+  <div class="card">
+    <div class="card-header">Add New Product</div>
+    <div id="add-product-form" style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-4);max-width:700px">
+      <div><label class="form-label">Product ID</label><input id="ap-id" class="input" placeholder="my_app"></div>
+      <div><label class="form-label">Display Name</label><input id="ap-name" class="input" placeholder="My App"></div>
+      <div><label class="form-label">Target URL</label><input id="ap-url" class="input" placeholder="https://myapp.com"></div>
+      <div><label class="form-label">GitHub Repo</label><input id="ap-repo" class="input" placeholder="org/repo"></div>
+      <div><label class="form-label">Owner</label><input id="ap-owner" class="input" placeholder="appsec-team"></div>
+      <div><label class="form-label">Criticality (1-10)</label><input id="ap-crit" type="number" min="1" max="10" value="5" class="input"></div>
+      <div><label class="form-label">Sensitivity (1-10)</label><input id="ap-sens" type="number" min="1" max="10" value="5" class="input"></div>
+      <div><label class="form-label">Trivy Image</label><input id="ap-trivy" class="input" placeholder="org/app:tag"></div>
+      <div style="grid-column:1/-1;display:flex;gap:var(--space-2);margin-top:var(--space-2)">
+        <button class="btn btn-primary" onclick="App.products.add()">Save Product</button>
+        <span id="ap-msg" style="font-size:var(--text-xs);align-self:center"></span>
       </div>
     </div>
   </div>
@@ -650,872 +401,761 @@ body{font-family:var(--font-sans);background:var(--bg);color:var(--text-primary)
 <!-- ═══════════════════════ CONTROL CENTER ═══════════════════════ -->
 <main id="page-control" class="page" role="tabpanel">
   <div class="control-grid">
-    <div class="control-section">
-      <div class="control-section-title">
-        <svg width="14" height="14"><use href="#icon-activity"/></svg>
-        System Status
-      </div>
+    <div class="card">
+      <div class="card-header">System Status</div>
       <div id="app-status-list"></div>
     </div>
-    <div class="control-section">
-      <div class="control-section-title">
-        <svg width="14" height="14"><use href="#icon-rocket"/></svg>
-        Quick Actions
-      </div>
-      <div class="btn-group">
-        <button class="btn btn-secondary" onclick="triggerScanAll()">
-          <svg width="16" height="16"><use href="#icon-search"/></svg>
-          Scan All Products
-        </button>
-        <button class="btn btn-primary" onclick="runPipeline()">
-          <svg width="16" height="16"><use href="#icon-play"/></svg>
-          Run Pipeline
-        </button>
-        <button class="btn btn-secondary" onclick="createTickets()">
-          <svg width="16" height="16"><use href="#icon-github"/></svg>
-          Create GitHub Issues
-        </button>
-        <button class="btn btn-secondary" onclick="checkDocker()">
-          <svg width="16" height="16"><use href="#icon-box"/></svg>
-          Check Docker Status
-        </button>
+    <div class="card">
+      <div class="card-header">Quick Actions</div>
+      <div style="display:flex;flex-direction:column;gap:var(--space-2)">
+        <button class="btn btn-primary" onclick="App.control.runPipeline()">Run Pipeline</button>
+        <button class="btn btn-secondary" onclick="App.control.scanAll()">Scan All Products</button>
+        <button class="btn btn-secondary" onclick="App.control.createTickets()">Create GitHub Issues</button>
+        <button class="btn btn-secondary" onclick="App.control.checkDocker()">Check Docker Status</button>
       </div>
     </div>
   </div>
-  <div class="control-section" style="margin-top:20px">
-    <div class="control-section-title">
-      <svg width="14" height="14"><use href="#icon-bar-chart"/></svg>
-      Scanner Progress
-    </div>
+  <div class="card" style="margin-top:var(--space-5)">
+    <div class="card-header">Scanner Progress</div>
     <div id="scanner-progress">
-      <div class="empty-state">
-        <svg width="32" height="32"><use href="#icon-search"/></svg>
-        <p class="empty-state-desc">No active scans. Use the controls above to start scanning.</p>
-      </div>
+      <p class="dimmed" style="font-size:var(--text-xs);text-align:center;padding:var(--space-5)">No active scans</p>
     </div>
   </div>
 </main>
 
 <!-- ═══════════════════════ LIFECYCLE ═══════════════════════ -->
 <main id="page-lifecycle" class="page" role="tabpanel">
-  <div class="kpi-grid" id="lc-kpi-grid"></div>
-  <div class="chart-card" style="margin-bottom:20px;padding:20px">
-    <div class="chart-header" style="padding:0 0 16px">
-      <svg width="16" height="16"><use href="#icon-refresh"/></svg>
-      <span class="chart-title">Vulnerability Lifecycle</span>
-    </div>
-    <p class="dimmed" style="font-size:12px;margin-bottom:16px">Track findings from Open &rarr; In Progress &rarr; Fixed &rarr; Verified. SLA deadlines shown in red when breached.</p>
+  <div class="lc-summary" id="lc-summary"></div>
+  <div class="card mb-6">
+    <div class="card-header">Vulnerability Lifecycle</div>
     <div id="lc-table-wrap"></div>
   </div>
-  <div class="chart-card" style="padding:20px">
-    <div class="chart-header" style="padding:0 0 16px">
-      <svg width="16" height="16"><use href="#icon-clock"/></svg>
-      <span class="chart-title">SLA Breach Monitor</span>
-    </div>
+  <div class="card">
+    <div class="card-header">SLA Breach Monitor</div>
     <div id="lc-breached-list"></div>
   </div>
 </main>
 
-<!-- ═══════════════════════ DEDUP ANALYTICS ═══════════════════════ -->
+<!-- ═══════════════════════ DEDUP ═══════════════════════ -->
 <main id="page-dedup" class="page" role="tabpanel">
-  <div class="kpi-grid" id="dedup-kpi-grid"></div>
-  <div class="chart-row-2">
-    <div class="chart-card">
-      <div class="chart-header">
-        <svg width="16" height="16"><use href="#icon-shuffle"/></svg>
-        <span class="chart-title">Findings per Scanner (Pre-Dedup)</span>
-      </div>
-      <div class="chart-body"><canvas id="c-dedup-scanner"></canvas></div>
+  <div class="card mb-6" id="dedup-summary-line"></div>
+  <div class="grid-2 mb-6">
+    <div class="card">
+      <div class="card-header">Findings per Scanner</div>
+      <div style="height:200px"><canvas id="c-dedup-scanner"></canvas></div>
     </div>
-    <div class="chart-card">
-      <div class="chart-header">
-        <svg width="16" height="16"><use href="#icon-link"/></svg>
-        <span class="chart-title">Cross-Scanner Redundancy</span>
-      </div>
-      <div class="chart-body"><canvas id="c-dedup-overlap"></canvas></div>
+    <div class="card">
+      <div class="card-header">Top Overlaps</div>
+      <div style="height:200px"><canvas id="c-dedup-overlap"></canvas></div>
     </div>
   </div>
-  <div class="chart-card" style="padding:20px">
-    <div class="chart-header" style="padding:0 0 16px">
-      <svg width="16" height="16"><use href="#icon-list"/></svg>
-      <span class="chart-title">Cross-Scanner Overlap Details</span>
-    </div>
+  <div class="card">
+    <div class="card-header">Overlap Details</div>
     <div id="dedup-overlap-table"></div>
   </div>
 </main>
 
 <!-- ═══════════════════════ INTEGRATIONS ═══════════════════════ -->
 <main id="page-integrations" class="page" role="tabpanel">
-  <div class="chart-card" style="margin-bottom:20px;padding:20px">
-    <div class="chart-header" style="padding:0 0 16px">
-      <svg width="16" height="16"><use href="#icon-key"/></svg>
-      <span class="chart-title">API Key Configuration</span>
-    </div>
-    <p class="dimmed" style="font-size:12px;margin-bottom:16px">Configure API keys for threat intelligence, AI enrichment, and integrations. Keys are stored in .env and used by the pipeline.</p>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;max-width:900px">
-      <div>
-        <div class="control-section-title">AI Enrichment</div>
-        <div class="field-group"><label for="ak-groq">Groq API Key (free at console.groq.com)</label><input id="ak-groq" class="search-box" style="width:100%;max-width:none" placeholder="gsk_..." type="password"></div>
-        <div class="field-group"><label for="ak-nvd">NVD API Key (optional, increases rate limit)</label><input id="ak-nvd" class="search-box" style="width:100%;max-width:none" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" type="password"></div>
-      </div>
-      <div>
-        <div class="control-section-title">GitHub (Auto-ticketing)</div>
-        <div class="field-group"><label for="ak-github">GitHub Token (creates Issues for P1/P2)</label><input id="ak-github" class="search-box" style="width:100%;max-width:none" placeholder="ghp_xxx..." type="password"></div>
-      </div>
-      <div>
-        <div class="control-section-title">Jira Integration</div>
-        <div class="field-group"><label for="ak-jira-url">Jira URL</label><input id="ak-jira-url" class="search-box" style="width:100%;max-width:none" placeholder="https://yourorg.atlassian.net"></div>
-        <div class="field-group"><label for="ak-jira-user">Username / Email</label><input id="ak-jira-user" class="search-box" style="width:100%;max-width:none" placeholder="user@company.com"></div>
-        <div class="field-group"><label for="ak-jira-token">API Token</label><input id="ak-jira-token" class="search-box" style="width:100%;max-width:none" placeholder="ATATT..." type="password"></div>
-        <div class="field-group"><label for="ak-jira-project">Project Key</label><input id="ak-jira-project" class="search-box" style="width:100%;max-width:none" placeholder="SEC"></div>
-      </div>
-      <div>
-        <div class="control-section-title">DefectDojo (Hybrid)</div>
-        <div class="field-group"><label for="ak-dd-url">DefectDojo URL</label><input id="ak-dd-url" class="search-box" style="width:100%;max-width:none" placeholder="http://localhost:8080"></div>
-        <div class="field-group"><label for="ak-dd-key">API Key</label><input id="ak-dd-key" class="search-box" style="width:100%;max-width:none" placeholder="your-defectdojo-api-key" type="password"></div>
+  <div class="grid-2 mb-6">
+    <div class="card integration-card">
+      <div class="card-header">AI Enrichment</div>
+      <div class="integration-fields">
+        <div><label class="form-label">Groq API Key</label><input id="ak-groq" class="input" type="password" placeholder="gsk_..."></div>
+        <div><label class="form-label">NVD API Key</label><input id="ak-nvd" class="input" type="password" placeholder="Optional"></div>
       </div>
     </div>
-    <div style="margin-top:16px;display:flex;gap:10px;align-items:center">
-      <button class="btn btn-success" onclick="saveApiKeys()">
-        <svg width="16" height="16"><use href="#icon-check"/></svg>
-        Save API Keys
-      </button>
-      <span id="apikey-status" style="font-size:12px"></span>
-    </div>
-  </div>
-  <div class="chart-row-2">
-    <div class="chart-card" style="padding:20px">
-      <div class="chart-header" style="padding:0 0 16px">
-        <svg width="16" height="16"><use href="#icon-ticket"/></svg>
-        <span class="chart-title">Jira Integration</span>
-      </div>
-      <div id="jira-panel">
-        <p class="dimmed" style="font-size:12px;margin-bottom:12px">Create Jira issues for high-risk findings.</p>
-        <div style="display:flex;gap:10px;margin-bottom:16px">
-          <button class="btn btn-secondary" onclick="testJira()">
-            <svg width="14" height="14"><use href="#icon-search"/></svg>
-            Test Connection
-          </button>
-          <button class="btn btn-success" onclick="createJiraIssues()">
-            <svg width="14" height="14"><use href="#icon-plus"/></svg>
-            Create Issues
-          </button>
-        </div>
-        <div id="jira-status"></div>
+    <div class="card integration-card">
+      <div class="card-header">GitHub</div>
+      <div class="integration-fields">
+        <div><label class="form-label">Token</label><input id="ak-github" class="input" type="password" placeholder="ghp_..."></div>
       </div>
     </div>
-    <div class="chart-card" style="padding:20px">
-      <div class="chart-header" style="padding:0 0 16px">
-        <svg width="16" height="16"><use href="#icon-shield-check"/></svg>
-        <span class="chart-title">DefectDojo Hybrid</span>
+    <div class="card integration-card">
+      <div class="card-header">Jira</div>
+      <div class="integration-fields">
+        <div><label class="form-label">URL</label><input id="ak-jira-url" class="input" placeholder="https://org.atlassian.net"></div>
+        <div><label class="form-label">Username</label><input id="ak-jira-user" class="input" placeholder="user@company.com"></div>
+        <div><label class="form-label">Token</label><input id="ak-jira-token" class="input" type="password" placeholder="ATATT..."></div>
+        <div><label class="form-label">Project Key</label><input id="ak-jira-project" class="input" placeholder="SEC"></div>
       </div>
-      <div id="dd-panel">
-        <p class="dimmed" style="font-size:12px;margin-bottom:12px">Our pipeline scores + enriches (AI-powered). DefectDojo is the safety net that catches anything we miss. Push findings for compliance, audit trail, and remediation lifecycle tracking.</p>
-        <div style="display:flex;gap:10px;margin-bottom:16px">
-          <button class="btn btn-secondary" onclick="testDefectDojo()">
-            <svg width="14" height="14"><use href="#icon-search"/></svg>
-            Test Connection
-          </button>
-          <button class="btn btn-success" onclick="importDefectDojo()">
-            <svg width="14" height="14"><use href="#icon-download"/></svg>
-            Import Findings
-          </button>
-        </div>
-        <div id="dd-status"></div>
+    </div>
+    <div class="card integration-card">
+      <div class="card-header">DefectDojo</div>
+      <div class="integration-fields">
+        <div><label class="form-label">URL</label><input id="ak-dd-url" class="input" placeholder="http://localhost:8080"></div>
+        <div><label class="form-label">API Key</label><input id="ak-dd-key" class="input" type="password"></div>
       </div>
     </div>
   </div>
-  <div class="chart-card" style="padding:20px">
-    <div class="chart-header" style="padding:0 0 16px">
-      <svg width="16" height="16"><use href="#icon-download"/></svg>
-      <span class="chart-title">Exports</span>
+  <div style="margin-bottom:var(--space-6)">
+    <button class="btn btn-primary" onclick="App.integrations.saveKeys()">Save All Keys</button>
+    <span id="apikey-status" style="font-size:var(--text-xs);margin-left:var(--space-2)"></span>
+  </div>
+  <div class="grid-2 mb-6">
+    <div class="card">
+      <div class="card-header">Jira Integration</div>
+      <div style="display:flex;gap:var(--space-2);margin-bottom:var(--space-3)">
+        <button class="btn btn-secondary btn-sm" onclick="App.integrations.testJira()">Test Connection</button>
+        <button class="btn btn-primary btn-sm" onclick="App.integrations.createJira()">Create Issues</button>
+      </div>
+      <div id="jira-status"></div>
     </div>
-    <div style="display:flex;gap:12px;flex-wrap:wrap">
-      <a class="btn btn-secondary" href="/api/exports/sarif" target="_blank">
-        <svg width="16" height="16"><use href="#icon-file-text"/></svg>
-        SARIF (GitHub Security)
-      </a>
-      <a class="btn btn-secondary" href="/api/exports/cyclonedx" target="_blank">
-        <svg width="16" height="16"><use href="#icon-box"/></svg>
-        CycloneDX SBOM
-      </a>
-      <a class="btn btn-secondary" href="/api/exports/defectdojo" target="_blank">
-        <svg width="16" height="16"><use href="#icon-shield-check"/></svg>
-        DefectDojo JSON
-      </a>
+    <div class="card">
+      <div class="card-header">DefectDojo</div>
+      <div style="display:flex;gap:var(--space-2);margin-bottom:var(--space-3)">
+        <button class="btn btn-secondary btn-sm" onclick="App.integrations.testDD()">Test Connection</button>
+        <button class="btn btn-primary btn-sm" onclick="App.integrations.importDD()">Import Findings</button>
+      </div>
+      <div id="dd-status"></div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-header">Exports</div>
+    <div style="display:flex;gap:var(--space-3);flex-wrap:wrap">
+      <a class="btn btn-secondary" href="/api/exports/sarif" target="_blank">SARIF</a>
+      <a class="btn btn-secondary" href="/api/exports/cyclonedx" target="_blank">CycloneDX SBOM</a>
+      <a class="btn btn-secondary" href="/api/exports/defectdojo" target="_blank">DefectDojo JSON</a>
     </div>
   </div>
 </main>
 
-<footer class="footer">Generated by the DevSecOps Risk Intelligence Pipeline v2.0 &middot; Chart.js 4 &middot; D3 v7 &middot; All data is local &mdash; no telemetry</footer>
+<!-- ═══════════════════════ DATA ═══════════════════════ -->
 <script>const DASH=__DASH_JSON__;</script>
 <script>
-const esc=s=>(s||'').toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\"/g,'&quot;');
-const $=id=>document.getElementById(id);
-const scoreColor=v=>v>=80?'#f87171':v>=60?'#fb923c':v>=40?'#facc15':'#4ade80';
-const priClass=p=>({P1:'b-p1',P2:'b-p2',P3:'b-p3',P4:'b-p4'}[p]||'b-p4');
-const sevClass=s=>({critical:'b-critical',high:'b-high',medium:'b-medium',low:'b-low',info:'b-info'}[s]||'b-info');
-const fmt=n=>typeof n==='number'?n.toLocaleString():n||'-';
-const pct=n=>n!=null&&n!==''?`${(n*100).toFixed(1)}%`:'-';
-const gridColor='rgba(148,163,184,0.06)';
-const cardCfg={plugins:{legend:{display:false}},maintainAspectRatio:false};
-let apInited=false;
-let HAS_CHART=false;
+/* ═══════════════════════ APP ═══════════════════════ */
+const App={
+  data:null,
+  state:{currentTab:'overview',apInited:false,ws:null},
+  hasChart:false,
 
-/* ─── Icon helper ─── */
-function iconSvg(id,w,h){return '<svg width="'+(w||16)+'" height="'+(h||16)+'"><use href="#'+id+'"/></svg>';}
+  init(){
+    this.data=DASH;
+    this._buildHeader();
+    this._initTabs();
+    this._initKeyboard();
+    this._waitForCharts();
+    this.overview.init();
+    this.findings.init();
+    this.buildQuarantine();
+    this.buildProducts();
+    this.lifecycle.init();
+    this.dedup.init();
+    if(location.hash)this._switchTab(location.hash.slice(1));
+  },
 
-/* ─── Toast notifications ─── */
-function showToast(message,type){
-  type=type||'info';
-  var container=document.querySelector('.toast-container');
-  if(!container){container=document.createElement('div');container.className='toast-container';document.body.appendChild(container);}
-  var icons={success:'icon-check',error:'icon-x',info:'icon-activity'};
-  var toast=document.createElement('div');
-  toast.className='toast toast-'+type;
-  toast.innerHTML=iconSvg(icons[type]||'icon-activity')+'<span>'+esc(message)+'</span>';
-  container.appendChild(toast);
-  setTimeout(function(){if(toast.parentNode)toast.remove();},5000);
-}
-/* Keep legacy helper for backward compat — redirects to toast */
-function updateControlStatus(msg,type){
-  var map={ok:'success',err:'error',info:'info',warn:'info'};
-  showToast(msg,map[type]||'info');
-}
+  /* --- Helpers --- */
+  $(id){return document.getElementById(id)},
+  esc(s){return(s||'').toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');},
+  scoreColor(v){return v>=80?'var(--risk-critical)':v>=60?'var(--risk-high)':v>=40?'var(--risk-medium)':'var(--risk-low)';},
+  priClass(p){return({P1:'b-p1',P2:'b-p2',P3:'b-p3',P4:'b-p4'}[p]||'b-p4');},
+  sevClass(s){return({critical:'b-critical',high:'b-high',medium:'b-medium',low:'b-low',info:'b-info-sev'}[s]||'b-info-sev');},
+  pct(n){return n!=null&&n!==''?(n*100).toFixed(1)+'%':'-';},
+  gridColor:'rgba(255,255,255,0.03)',
+  cardCfg:{plugins:{legend:{display:false}},maintainAspectRatio:false},
 
-/* ─── Auth helpers ─── */
-function apiHeaders(extra){return Object.assign({'Content-Type':'application/json'},extra||{});}
-function apiFetch(url,opts){
-  opts=opts||{};
-  opts.headers=apiHeaders(opts.headers);
-  return fetch(url,opts).then(function(r){
-    if(r.status===401){window.location.href='/';return{};}
-    return r.json();
-  });
-}
+  toast(msg,type){
+    type=type||'info';
+    var c=document.querySelector('.toast-container');
+    if(!c){c=document.createElement('div');c.className='toast-container';document.body.appendChild(c);}
+    var t=document.createElement('div');
+    t.className='toast toast-'+type;
+    t.innerHTML='<span>'+this.esc(msg)+'</span>';
+    c.appendChild(t);
+    setTimeout(function(){if(t.parentNode)t.remove();},5000);
+  },
 
-/* ─── Tab switching ─── */
-document.querySelectorAll('.tab-btn').forEach(function(btn){
-  btn.addEventListener('click',function(){
-    document.querySelectorAll('.tab-btn').forEach(function(b){b.classList.remove('active');b.setAttribute('aria-selected','false');});
-    document.querySelectorAll('.page').forEach(function(p){p.classList.remove('active');});
-    btn.classList.add('active');
-    btn.setAttribute('aria-selected','true');
-    var page='page-'+btn.dataset.page;
-    var pg=$(page);if(pg)pg.classList.add('active');
-    if(btn.dataset.page==='attackpaths'&&!apInited){initD3();apInited=true;}
-    if(btn.dataset.page==='control'){loadAppStatus();connectWebSocket();loadScannerJobs();}
-    location.hash=btn.dataset.page;
-  });
-});
-
-/* ─── URL hash navigation ─── */
-function syncTabFromHash(){
-  var hash=location.hash.replace('#','');
-  if(hash){
-    var btn=document.querySelector('.tab-btn[data-page="'+hash+'"]');
-    if(btn)btn.click();
-  }
-}
-window.addEventListener('hashchange',syncTabFromHash);
-if(location.hash)syncTabFromHash();
-
-/* ─── Keyboard navigation ─── */
-document.addEventListener('keydown',function(e){
-  if(e.key==='Escape'){
-    document.querySelectorAll('.detail-row.open').forEach(function(r){r.classList.remove('open');});
-    document.querySelectorAll('.data-row.expanded').forEach(function(r){r.classList.remove('expanded');});
-  }
-});
-
-/* ─── Animate counter ─── */
-function animateCount(el,target){
-  if(!el)return;
-  var dur=1400,start=performance.now();
-  var isFloat=String(target).includes('.');
-  function tick(now){
-    var p=Math.min((now-start)/dur,1);
-    var ease=1-Math.pow(1-p,3);
-    var val=ease*target;
-    el.textContent=isFloat?val.toFixed(1):Math.round(val).toLocaleString();
-    if(p<1)requestAnimationFrame(tick);
-  }
-  requestAnimationFrame(tick);
-}
-
-/* ─── SVG icon helper for JS ─── */
-function svgIcon(id,sz){return '<svg width="'+(sz||16)+'" height="'+(sz||16)+'"><use href="#'+id+'"/></svg>';}
-
-/* ─── Header ─── */
-(function buildHeader(){
-  try{
-    var S=DASH.summary;var meta=$('run-meta');if(!meta)return;
-    var pills=['<span class="meta-pill">'+esc(S.run_date.substring(0,16))+'</span>'];
-    S.products.forEach(function(p){pills.push('<span class="meta-pill">'+esc(p)+'</span>');});
-    if(S.p1>0)pills.push('<span class="meta-pill critical">P1: '+S.p1+'</span>');
-    meta.innerHTML=pills.join('');
-    var tc=$('tc-findings');if(tc)tc.textContent=S.final_findings;
-    var tq=$('tc-quarantine');if(tq)tq.textContent=S.quarantined;
-  }catch(e){console.error('buildHeader:',e);}
-})();
-
-/* ─── Brief ─── */
-(function buildBrief(){
-  try{
-    var brief=DASH.executive_brief;
-    if(!brief){var bs=$('brief-section');if(bs)bs.style.display='none';return;}
-    var bs2=$('brief-section');
-    if(bs2)bs2.innerHTML='<div class="brief-card"><div class="brief-icon">'+svgIcon('icon-bot',28)+'</div><div><div class="brief-label">AI Executive Brief</div><div class="brief-text">'+esc(brief)+'</div></div></div>';
-  }catch(e){console.error('buildBrief:',e);}
-})();
-
-/* ─── KPIs ─── */
-(function buildKPIs(){
-  try{
-    var S=DASH.summary;
-    var noiseRm=S.raw_findings>0?((S.raw_findings-S.final_findings)/S.raw_findings*100).toFixed(1):0;
-    var cards=[
-      {v:S.raw_findings,l:'Raw Findings',sub:'Before processing',cls:'',icon:'icon-search',iconCls:''},
-      {v:S.unique_findings,l:'After Deduplication',sub:S.dedup_pct+'% removed',cls:'',icon:'icon-shuffle',iconCls:''},
-      {v:S.quarantined,l:'Quarantined',sub:'False positives / accepted risk',cls:'',icon:'icon-alert',iconCls:''},
-      {v:S.final_findings,l:'Active Findings',sub:'Prioritized & scored',cls:'warn',icon:'icon-target',iconCls:''},
-      {v:S.p1+S.p2,l:'Critical + High',sub:S.p1+' P1 \u00b7 '+S.p2+' P2',cls:'danger',icon:'icon-zap',iconCls:''},
-      {v:S.avg_score,l:'Average Risk Score',sub:'Top: '+S.top_score,cls:'',icon:'icon-activity',iconCls:''},
-      {v:noiseRm+'%',l:'Noise Reduction',sub:'Raw to final',cls:'success',icon:'icon-trend-down',iconCls:''}
-    ];
-    var grid=$('kpi-grid');if(!grid)return;
-    grid.innerHTML=cards.map(function(c,i){
-      return '<div class="kpi-card '+c.cls+'"><div class="kpi-header"><div class="kpi-icon">'+svgIcon(c.icon)+'</div></div><div class="kpi-value" id="kv-'+i+'">'+(typeof c.v==='number'?'0':c.v)+'</div><div class="kpi-label">'+c.l+'</div><div class="kpi-sub">'+c.sub+'</div></div>';
-    }).join('');
-    cards.forEach(function(c,i){if(typeof c.v==='number')animateCount($('kv-'+i),c.v);});
-  }catch(e){console.error('buildKPIs:',e);}
-})();
-
-/* ─── Charts (wait for Chart.js to load) ─── */
-function initCharts(){
-  if(typeof Chart==='undefined')return;
-  HAS_CHART=true;
-  Chart.defaults.color='#94a3b8';
-  Chart.defaults.font.family="'Inter',system-ui,sans-serif";
-  Chart.defaults.font.size=11;
-  try{
-    var S=DASH.summary,F=DASH.findings,H=DASH.history;
-
-    // Priority donut
-    var priEl=$('c-priority');
-    if(priEl){
-      new Chart(priEl,{type:'doughnut',data:{labels:['P1 Critical (90+)','P2 High (70-89)','P3 Medium (40-69)','P4 Low (<40)'],datasets:[{data:[S.p1,S.p2,S.p3,S.p4],backgroundColor:['#f87171','#fb923c','#facc15','#64748b'],borderWidth:0,hoverOffset:6,borderRadius:4}]},options:{...cardCfg,cutout:'68%',plugins:{legend:{display:true,position:'bottom',labels:{color:'#94a3b8',boxWidth:10,boxHeight:10,padding:12}},tooltip:{callbacks:{label:function(ctx){return ctx.label+': '+ctx.raw+' findings';}}}}}});
-    }
-
-    // Severity bar
-    var sevEl=$('c-severity');
-    if(sevEl){
-      var sevCounts={critical:0,high:0,medium:0,low:0,info:0};
-      F.forEach(function(f){sevCounts[f.severity]=(sevCounts[f.severity]||0)+1;});
-      var sevLabels=['critical','high','medium','low','info'];
-      new Chart(sevEl,{type:'bar',data:{labels:sevLabels.map(function(s){return s.charAt(0).toUpperCase()+s.slice(1);}),datasets:[{data:sevLabels.map(function(s){return sevCounts[s]||0;}),backgroundColor:['rgba(248,113,113,.8)','rgba(251,146,60,.8)','rgba(250,204,21,.8)','rgba(74,222,128,.8)','rgba(100,116,139,.8)'],borderWidth:0,borderRadius:4}]},options:{...cardCfg,indexAxis:'y',scales:{x:{grid:{color:gridColor},ticks:{color:'#94a3b8'}},y:{grid:{display:false},ticks:{color:'#94a3b8'}}},plugins:{legend:{display:false},tooltip:{callbacks:{label:function(ctx){return ctx.raw+' findings';}}}}}});
-    }
-
-    // Scanner coverage
-    var scanEl=$('c-scanner');
-    if(scanEl){
-      var scanMap={};F.forEach(function(f){scanMap[f.scanner]=(scanMap[f.scanner]||0)+1;});
-      var scanKeys=Object.keys(scanMap).sort(function(a,b){return scanMap[b]-scanMap[a];});
-      new Chart(scanEl,{type:'bar',data:{labels:scanKeys,datasets:[{data:scanKeys.map(function(k){return scanMap[k];}),backgroundColor:'rgba(34,211,238,.7)',borderWidth:0,borderRadius:4}]},options:{...cardCfg,indexAxis:'y',scales:{x:{grid:{color:gridColor},ticks:{color:'#94a3b8'}},y:{grid:{display:false},ticks:{color:'#94a3b8'}}},plugins:{legend:{display:false}}}});
-    }
-
-    // Noise reduction pipeline
-    var noiseEl=$('c-noise');
-    if(noiseEl){
-      new Chart(noiseEl,{type:'bar',data:{labels:['Raw findings','After dedup','After filtering','Active'],datasets:[{label:'Findings',data:[S.raw_findings,S.unique_findings,S.unique_findings-S.quarantined,S.final_findings],backgroundColor:['rgba(96,165,250,.7)','rgba(34,211,238,.7)','rgba(250,204,21,.7)','rgba(74,222,128,.7)'],borderWidth:0,borderRadius:6}]},options:{...cardCfg,scales:{y:{grid:{color:gridColor},ticks:{color:'#94a3b8'}},x:{grid:{display:false},ticks:{color:'#94a3b8'}}},plugins:{legend:{display:false},tooltip:{callbacks:{label:function(ctx){return ctx.raw.toLocaleString()+' findings';}}}}}});
-    }
-
-    // Risk over time
-    var histEl=$('c-history');
-    if(histEl){
-      var colors=['#60a5fa','#22d3ee','#818cf8','#4ade80','#fb923c'];
-      var products=Object.keys(H);
-      var histDatasets=[];
-      products.forEach(function(prod,idx){
-        var runs=H[prod];
-        if(!runs||runs.length<1)return;
-        histDatasets.push({label:prod,data:runs.map(function(r){return {x:r.run_date,y:r.avg_score};}),borderColor:colors[idx%colors.length],backgroundColor:'transparent',tension:.4,pointRadius:4,pointHoverRadius:6,borderWidth:2});
-      });
-      if(histDatasets.length){
-        new Chart(histEl,{type:'line',data:{datasets:histDatasets},options:{...cardCfg,scales:{x:{type:'category',grid:{color:gridColor},ticks:{color:'#94a3b8',maxRotation:30}},y:{grid:{color:gridColor},ticks:{color:'#94a3b8'},title:{display:true,text:'Avg score',color:'#64748b'}}},plugins:{legend:{display:products.length>1,position:'bottom',labels:{color:'#94a3b8'}}}}});
-      }else{
-        histEl.parentElement.innerHTML='<div class="empty-state">'+svgIcon('icon-trend-up',32)+'<p class="empty-state-title">No History Data</p><p class="empty-state-desc">Need 2+ pipeline runs to show trend.</p></div>';
-      }
-    }
-
-    // EPSS scatter
-    var epssEl=$('c-epss');
-    if(epssEl){
-      var epssData=F.filter(function(f){return f.epss_score>0&&f.score>0;}).map(function(f){return {x:parseFloat((f.epss_score*100).toFixed(2)),y:f.score,label:f.title,kev:f.kev,sev:f.severity};});
-      new Chart(epssEl,{type:'scatter',data:{datasets:[{label:'Findings',data:epssData,backgroundColor:epssData.map(function(p){return p.kev?'rgba(248,113,113,.75)':p.sev==='critical'?'rgba(248,113,113,.5)':p.sev==='high'?'rgba(251,146,60,.5)':p.sev==='medium'?'rgba(250,204,21,.5)':'rgba(74,222,128,.35)';}),pointRadius:5,pointHoverRadius:8}]},options:{...cardCfg,scales:{x:{title:{display:true,text:'EPSS score (%)',color:'#64748b'},grid:{color:gridColor},ticks:{color:'#94a3b8'}},y:{title:{display:true,text:'Risk score',color:'#64748b'},grid:{color:gridColor},ticks:{color:'#94a3b8'},min:0,max:100}},plugins:{legend:{display:false},tooltip:{callbacks:{label:function(ctx){var d=ctx.raw;return [d.label.substring(0,40),'EPSS: '+d.x+'%  Score: '+d.y,d.kev?'In CISA KEV':''];}}}}}});
-    }
-
-    // Threat intel coverage
-    var threatEl=$('c-threat');
-    if(threatEl){
-      var kevCount=F.filter(function(f){return f.kev;}).length;
-      var exploitCount=F.filter(function(f){return f.exploit_available&&!f.kev;}).length;
-      var epssHighCount=F.filter(function(f){return f.epss_score>.3&&!f.kev&&!f.exploit_available;}).length;
-      var noIntelCount=F.length-kevCount-exploitCount-epssHighCount;
-      new Chart(threatEl,{type:'doughnut',data:{labels:['CISA KEV (confirmed exploit)','Exploit-DB match','EPSS > 30%','No active intel'],datasets:[{data:[kevCount,exploitCount,epssHighCount,noIntelCount],backgroundColor:['rgba(248,113,113,.85)','rgba(251,146,60,.8)','rgba(250,204,21,.7)','rgba(100,116,139,.4)'],borderWidth:0,hoverOffset:6,borderRadius:4}]},options:{...cardCfg,cutout:'60%',plugins:{legend:{display:true,position:'bottom',labels:{color:'#94a3b8',boxWidth:10,boxHeight:10,padding:10}}}}});
-    }
-  }catch(e){console.error('initCharts:',e);}
-}
-
-function waitForCharts(){
-  if(typeof Chart!=='undefined'){initCharts();return;}
-  var attempts=0;
-  var check=setInterval(function(){
-    attempts++;
-    if(typeof Chart!=='undefined'){clearInterval(check);initCharts();}
-    if(attempts>100){clearInterval(check);console.warn('Chart.js did not load');}
-  },200);
-}
-if(document.readyState==='loading'){
-  document.addEventListener('DOMContentLoaded',function(){waitForCharts();initTable();});
-}else{
-  waitForCharts();initTable();
-}
-
-/* ─── Findings Table ─── */
-function initTable(){
-  try{
-    var F=DASH.findings;
-    var priorities=[...new Set(F.map(function(f){return f.priority;}))].sort();
-    var severities=[...new Set(F.map(function(f){return f.severity;}))].sort();
-    var scanners=[...new Set(F.map(function(f){return f.scanner;}))].sort();
-    [['f-priority',priorities],['f-severity',severities],['f-scanner',scanners]].forEach(function(arr){
-      var sel=$(arr[0]);if(!sel)return;
-      arr[1].forEach(function(v){
-        var o=document.createElement('option');o.value=v;o.textContent=v;sel.appendChild(o);
-      });
+  apiFetch(url,opts){
+    opts=opts||{};
+    opts.headers=Object.assign({'Content-Type':'application/json'},opts.headers||{});
+    return fetch(url,opts).then(function(r){
+      if(r.status===401){window.location.href='/';return{};}
+      return r.json();
     });
-    var COLS=[
-      {k:'rank',label:'#',w:'40px',sortable:true},
-      {k:'score',label:'Score',w:'110px',sortable:true},
-      {k:'priority',label:'Priority',w:'80px',sortable:true},
-      {k:'sla_hours',label:'SLA',w:'60px',sortable:true},
-      {k:'product',label:'Product',w:'100px',sortable:true},
-      {k:'scanner',label:'Scanner',w:'80px',sortable:true},
-      {k:'severity',label:'Severity',w:'80px',sortable:true},
-      {k:'title',label:'Title',w:'',sortable:false},
-      {k:'cve',label:'CVE',w:'140px',sortable:false},
-      {k:'kev',label:'KEV',w:'60px',sortable:true},
-      {k:'epss_score',label:'EPSS',w:'70px',sortable:true},
-      {k:'cwe',label:'CWE',w:'90px',sortable:false}
-    ];
-    var thead=$('tbl-head');if(!thead)return;
-    thead.innerHTML='<tr>'+COLS.map(function(c){
-      return '<th style="'+(c.w?'width:'+c.w:'')+'" '+(c.sortable?'data-col="'+c.k+'"':'')+'>'+c.label+(c.sortable?'<span class="sort-arrow">&#x2195;</span>':'')+'</th>';
-    }).join('')+'</tr>';
-    var sortCol='score',sortDir=-1,search='',fPri='',fSev='',fScan='',fKev='';
-    function getFiltered(){
-      var q=search.toLowerCase();
+  },
+
+  /* --- Header --- */
+  _buildHeader(){
+    var S=this.data.summary;
+    var meta=this.$('run-meta');
+    if(!meta)return;
+    var parts=[S.run_date?S.run_date.substring(0,16):''];
+    if(S.products)parts.push(S.products.length+' products');
+    if(S.p1>0)parts.push('<span class="p1-count">'+S.p1+' P1</span>');
+    if(S.p2>0)parts.push('<span class="p2-count">'+S.p2+' P2</span>');
+    meta.innerHTML=parts.join(' · ');
+    var tf=this.$('tc-findings');if(tf)tf.textContent='('+S.final_findings+')';
+    var tq=this.$('tc-quarantine');if(tq)tq.textContent='('+S.quarantined+')';
+  },
+
+  /* --- Tabs --- */
+  _initTabs(){
+    var self=this;
+    document.querySelectorAll('.tab-btn').forEach(function(btn){
+      btn.addEventListener('click',function(){self._switchTab(btn.dataset.page);});
+    });
+    window.addEventListener('hashchange',function(){
+      var h=location.hash.slice(1);if(h)self._switchTab(h);
+    });
+  },
+  _switchTab(page){
+    var self=this;
+    document.querySelectorAll('.tab-btn').forEach(function(b){
+      b.classList.toggle('active',b.dataset.page===page);
+      b.setAttribute('aria-selected',b.dataset.page===page?'true':'false');
+    });
+    document.querySelectorAll('.page').forEach(function(p){p.classList.remove('active');});
+    var pg=self.$('page-'+page);if(pg)pg.classList.add('active');
+    self.state.currentTab=page;
+    location.hash=page;
+    if(page==='attackpaths'&&!self.state.apInited){self.attackPaths.init();self.state.apInited=true;}
+    if(page==='control'){self.control.loadStatus();self.control.connectWS();self.control.loadJobs();}
+  },
+
+  /* --- Keyboard --- */
+  _initKeyboard(){
+    document.addEventListener('keydown',function(e){
+      if(e.key==='Escape'){
+        document.querySelectorAll('.detail-row.open').forEach(function(r){r.classList.remove('open');});
+        document.querySelectorAll('.data-row.expanded').forEach(function(r){r.classList.remove('expanded');});
+      }
+    });
+  },
+
+  /* --- Charts --- */
+  _waitForCharts(){
+    var self=this;
+    if(typeof Chart!=='undefined'){self.overview.initCharts();return;}
+    var n=0;
+    var iv=setInterval(function(){
+      n++;
+      if(typeof Chart!=='undefined'){clearInterval(iv);self.overview.initCharts();}
+      if(n>100){clearInterval(iv);}
+    },200);
+  },
+
+  /* ═══ OVERVIEW ═══ */
+  overview:{
+    init(){
+      var S=App.data.summary;
+      var noiseRm=S.raw_findings>0?((S.raw_findings-S.final_findings)/S.raw_findings*100).toFixed(1):'0';
+      var cards=[
+        {v:S.raw_findings,l:'Raw Findings',sub:'Before processing',color:''},
+        {v:S.unique_findings,l:'After Dedup',sub:S.dedup_pct+'% removed',color:''},
+        {v:S.quarantined,l:'Quarantined',sub:'False positives / accepted',color:''},
+        {v:S.final_findings,l:'Active Findings',sub:'Prioritized & scored',color:''},
+        {v:S.p1+S.p2,l:'Critical + High',sub:S.p1+' P1 · '+S.p2+' P2',color:S.p1>0?'text-critical':''},
+        {v:S.avg_score,l:'Avg Risk Score',sub:'Top: '+S.top_score,color:''},
+        {v:noiseRm+'%',l:'Noise Reduction',sub:'Raw to final',color:'text-low'}
+      ];
+      var grid=App.$('kpi-grid');if(!grid)return;
+      grid.innerHTML=cards.map(function(c,i){
+        var vColor=c.color?' class="'+c.color+'"':'';
+        return '<div class="card"><div class="kpi-value" id="kv-'+i+'"'+vColor+'>'+(typeof c.v==='number'?'0':c.v)+'</div><div class="kpi-label">'+c.l+'</div><div class="kpi-sub">'+c.sub+'</div></div>';
+      }).join('');
+      cards.forEach(function(c,i){if(typeof c.v==='number')App.overview._animateCount(App.$('kv-'+i),c.v);});
+    },
+    _animateCount(el,target){
+      if(!el)return;
+      var dur=1200,start=performance.now();
+      var isFloat=String(target).includes('.');
+      function tick(now){
+        var p=Math.min((now-start)/dur,1);
+        var ease=1-Math.pow(1-p,3);
+        var val=ease*target;
+        el.textContent=isFloat?val.toFixed(1):Math.round(val).toLocaleString();
+        if(p<1)requestAnimationFrame(tick);
+      }
+      requestAnimationFrame(tick);
+    },
+    initCharts(){
+      if(typeof Chart==='undefined')return;
+      App.hasChart=true;
+      Chart.defaults.color='#9CA3AF';
+      Chart.defaults.font.family="'Inter',system-ui,sans-serif";
+      Chart.defaults.font.size=11;
+      try{
+        var S=App.data.summary,F=App.data.findings,H=App.data.history;
+        // Priority horizontal bar
+        var pe=App.$('c-priority');
+        if(pe)new Chart(pe,{type:'bar',data:{labels:['P1 Critical','P2 High','P3 Medium','P4 Low'],datasets:[{data:[S.p1,S.p2,S.p3,S.p4],backgroundColor:['rgba(239,68,68,.8)','rgba(245,158,11,.8)','rgba(234,179,8,.8)','rgba(107,114,128,.4)'],borderWidth:0,borderRadius:4}]},options:{...App.cardCfg,indexAxis:'y',scales:{x:{grid:{color:App.gridColor},ticks:{font:{size:10}}},y:{grid:{display:false},ticks:{font:{size:10}}}},plugins:{legend:{display:false}}}});
+        // Severity horizontal bar
+        var se=App.$('c-severity');
+        if(se){
+          var sc={critical:0,high:0,medium:0,low:0,info:0};
+          F.forEach(function(f){sc[f.severity]=(sc[f.severity]||0)+1;});
+          var sl=['critical','high','medium','low','info'];
+          new Chart(se,{type:'bar',data:{labels:sl.map(function(s){return s.charAt(0).toUpperCase()+s.slice(1);}),datasets:[{data:sl.map(function(s){return sc[s]||0;}),backgroundColor:['rgba(239,68,68,.8)','rgba(245,158,11,.8)','rgba(234,179,8,.8)','rgba(34,197,94,.8)','rgba(107,114,128,.4)'],borderWidth:0,borderRadius:4}]},options:{...App.cardCfg,indexAxis:'y',scales:{x:{grid:{color:App.gridColor},ticks:{font:{size:10}}},y:{grid:{display:false},ticks:{font:{size:10}}}},plugins:{legend:{display:false}}}});
+        }
+        // Scanner coverage horizontal bar
+        var sce=App.$('c-scanner');
+        if(sce){
+          var sm={};F.forEach(function(f){sm[f.scanner]=(sm[f.scanner]||0)+1;});
+          var sk=Object.keys(sm).sort(function(a,b){return sm[b]-sm[a];});
+          new Chart(sce,{type:'bar',data:{labels:sk,datasets:[{data:sk.map(function(k){return sm[k];}),backgroundColor:'rgba(59,130,246,.7)',borderWidth:0,borderRadius:4}]},options:{...App.cardCfg,indexAxis:'y',scales:{x:{grid:{color:App.gridColor},ticks:{font:{size:10}}},y:{grid:{display:false},ticks:{font:{size:10}}}},plugins:{legend:{display:false}}}});
+        }
+        // Noise reduction vertical bar
+        var ne=App.$('c-noise');
+        if(ne)new Chart(ne,{type:'bar',data:{labels:['Raw','Dedup','Filtered','Active'],datasets:[{data:[S.raw_findings,S.unique_findings,S.unique_findings-S.quarantined,S.final_findings],backgroundColor:['rgba(59,130,246,.7)','rgba(59,130,246,.5)','rgba(234,179,8,.7)','rgba(34,197,94,.7)'],borderWidth:0,borderRadius:4}]},options:{...App.cardCfg,scales:{y:{grid:{color:App.gridColor},ticks:{font:{size:10}}},x:{grid:{display:false},ticks:{font:{size:10}}}},plugins:{legend:{display:false}}}});
+        // Risk over time line
+        var he=App.$('c-history');
+        if(he){
+          var colors=['var(--risk-info)','var(--risk-low)','var(--risk-medium)','var(--risk-critical)','var(--risk-high)'];
+          var prods=Object.keys(H);
+          var hds=[];
+          prods.forEach(function(prod,idx){
+            var runs=H[prod];if(!runs||runs.length<1)return;
+            hds.push({label:prod,data:runs.map(function(r){return{x:r.run_date,y:r.avg_score};}),borderColor:['#3B82F6','#22C55E','#EAB308','#EF4444','#F59E0B'][idx%5],backgroundColor:'transparent',tension:.4,pointRadius:4,borderWidth:2});
+          });
+          if(hds.length){
+            new Chart(he,{type:'line',data:{datasets:hds},options:{...App.cardCfg,scales:{x:{type:'category',grid:{color:App.gridColor},ticks:{font:{size:10}}},y:{grid:{color:App.gridColor},ticks:{font:{size:10}},min:0,max:100}},plugins:{legend:{display:prods.length>1,position:'bottom',labels:{font:{size:10}}}}}});
+          }else{
+            he.parentElement.innerHTML='<div class="empty-state" style="height:200px"><p class="empty-state-desc">Need 2+ runs for trend data</p></div>';
+          }
+        }
+      }catch(e){console.error('initCharts:',e);}
+    }
+  },
+
+  /* ═══ FINDINGS ═══ */
+  findings:{
+    _sortCol:'score',_sortDir:-1,_search:'',_fPri:'',_fSev:'',_fScan:'',_fKev:'',
+    init(){
+      var F=App.data.findings;
+      var COLS=[
+        {k:'rank',label:'#',w:'40px',sortable:true},
+        {k:'score',label:'Score',w:'80px',sortable:true},
+        {k:'priority',label:'Priority',w:'80px',sortable:true},
+        {k:'severity',label:'Severity',w:'80px',sortable:true},
+        {k:'title',label:'Title',w:'',sortable:false},
+        {k:'product',label:'Product',w:'100px',sortable:true},
+        {k:'scanner',label:'Scanner',w:'80px',sortable:true},
+        {k:'cve',label:'CVE',w:'130px',sortable:false},
+        {k:'kev',label:'KEV',w:'50px',sortable:true},
+        {k:'epss_score',label:'EPSS',w:'60px',sortable:true},
+        {k:'sla_hours',label:'SLA',w:'50px',sortable:true}
+      ];
+      var thead=App.$('tbl-head');if(!thead)return;
+      thead.innerHTML='<tr>'+COLS.map(function(c){
+        return '<th style="'+(c.w?'width:'+c.w:'')+'" '+(c.sortable?'data-col="'+c.k+'"':'')+'>'+c.label+(c.sortable?'<span class="sort-arrow">&#x2195;</span>':'')+'</th>';
+      }).join('')+'</tr>';
+      // Populate filter dropdowns
+      var priorities=[...new Set(F.map(function(f){return f.priority;}))].sort();
+      var severities=[...new Set(F.map(function(f){return f.severity;}))].sort();
+      var scanners=[...new Set(F.map(function(f){return f.scanner;}))].sort();
+      [['f-priority',priorities],['f-severity',severities],['f-scanner',scanners]].forEach(function(arr){
+        var sel=App.$(arr[0]);if(!sel)return;
+        arr[1].forEach(function(v){var o=document.createElement('option');o.value=v;o.textContent=v;sel.appendChild(o);});
+      });
+      // Bind events
+      var self=this;
+      document.querySelectorAll('#tbl-head th[data-col]').forEach(function(th){
+        th.addEventListener('click',function(){
+          if(self._sortCol===th.dataset.col){self._sortDir*=-1;}else{self._sortCol=th.dataset.col;self._sortDir=-1;}
+          document.querySelectorAll('#tbl-head th').forEach(function(t){t.classList.remove('sorted');var a=t.querySelector('.sort-arrow');if(a)a.textContent='\u2195';});
+          th.classList.add('sorted');var arrow=th.querySelector('.sort-arrow');if(arrow)arrow.textContent=self._sortDir===-1?'\u2193':'\u2191';
+          self.render();
+        });
+      });
+      var searchTimer;
+      var sb=App.$('tbl-search');if(sb)sb.addEventListener('input',function(e){clearTimeout(searchTimer);searchTimer=setTimeout(function(){self._search=e.target.value;self.render();},300);});
+      App.$('f-priority').onchange=function(e){self._fPri=e.target.value;self.render();};
+      App.$('f-severity').onchange=function(e){self._fSev=e.target.value;self.render();};
+      App.$('f-scanner').onchange=function(e){self._fScan=e.target.value;self.render();};
+      App.$('f-kev').onchange=function(e){self._fKev=e.target.value;self.render();};
+      this.render();
+    },
+    getFiltered(){
+      var F=App.data.findings,q=this._search.toLowerCase(),self=this;
       return F.filter(function(f){
-        if(fPri&&f.priority!==fPri)return false;
-        if(fSev&&f.severity!==fSev)return false;
-        if(fScan&&f.scanner!==fScan)return false;
-        if(fKev==='kev'&&!f.kev)return false;
-        if(fKev==='exploit'&&!f.exploit_available)return false;
+        if(self._fPri&&f.priority!==self._fPri)return false;
+        if(self._fSev&&f.severity!==self._fSev)return false;
+        if(self._fScan&&f.scanner!==self._fScan)return false;
+        if(self._fKev==='kev'&&!f.kev)return false;
+        if(self._fKev==='exploit'&&!f.exploit_available)return false;
         if(q)return(f.title+f.cve+f.cwe+f.endpoint+f.product).toLowerCase().includes(q);
         return true;
       }).sort(function(a,b){
-        var av=a[sortCol],bv=b[sortCol];
-        if(typeof av==='number')return(av-bv)*sortDir;
-        return String(av).localeCompare(String(bv))*sortDir;
+        var av=a[self._sortCol],bv=b[self._sortCol];
+        if(typeof av==='number')return(av-bv)*self._sortDir;
+        return String(av).localeCompare(String(bv))*self._sortDir;
       });
-    }
-    function renderRow(f){
-      var sc=scoreColor(f.score);
+    },
+    render(){
+      var rows=this.getFiltered();
+      var rb=App.$('result-badge');if(rb)rb.textContent=rows.length+' of '+App.data.findings.length+' findings';
+      var tb=App.$('tbl-body');if(tb)tb.innerHTML=rows.map(this._renderRow).join('');
+    },
+    _renderRow(f){
+      var sc=App.scoreColor(f.score);
       var epssStr=f.epss_score>0?(f.epss_score*100).toFixed(1)+'%':'-';
-      return '<tr class="data-row" data-rank="'+f.rank+'" onclick="toggleDetail(this)"><td class="no-wrap mono dimmed">'+f.rank+'</td><td class="no-wrap"><div class="score-cell"><span class="score-num" style="color:'+sc+'">'+f.score+'</span><div class="score-track"><div class="score-fill" style="width:'+f.score+'%;background:'+sc+'"></div></div></div></td><td class="no-wrap"><span class="badge '+priClass(f.priority)+'">'+esc(f.priority)+'</span></td><td class="no-wrap dimmed mono" style="font-size:11px">'+f.sla_hours+'h</td><td class="truncate primary" style="max-width:100px">'+esc(f.product)+'</td><td class="no-wrap dimmed" style="font-size:11.5px">'+esc(f.scanner)+'</td><td class="no-wrap"><span class="badge '+sevClass(f.severity)+'">'+esc(f.severity)+'</span></td><td style="max-width:300px"><span class="truncate primary" style="display:block">'+esc(f.title)+'</span></td><td class="no-wrap">'+(f.cve?'<a class="cve-link" href="https://nvd.nist.gov/vuln/detail/'+esc(f.cve)+'" target="_blank" onclick="event.stopPropagation()">'+esc(f.cve)+'</a>':'-')+'</td><td class="no-wrap">'+(f.kev?'<span class="badge b-kev">KEV</span>':f.exploit_available?'<span class="badge b-exploit">Exploit</span>':'')+'</td><td class="no-wrap mono" style="font-size:11px"><span class="badge b-epss">'+epssStr+'</span></td><td class="no-wrap mono dimmed" style="font-size:11px">'+esc(f.cwe||'-')+'</td></tr><tr class="detail-row" id="detail-'+f.rank+'"><td colspan="12">'+renderDetail(f)+'</td></tr>';
-    }
-    function renderDetail(f){
+      var title=f.title||'';
+      var truncated=title.length>50?title.substring(0,50)+'…':title;
+      return '<tr class="data-row" data-rank="'+f.rank+'" onclick="App.findings.toggleDetail(this)">'+
+        '<td class="mono dimmed" style="font-size:11px">'+f.rank+'</td>'+
+        '<td><span class="score-num" style="color:'+sc+'">'+f.score+'</span></td>'+
+        '<td><span class="badge '+App.priClass(f.priority)+'">'+App.esc(f.priority)+'</span></td>'+
+        '<td><span class="badge '+App.sevClass(f.severity)+'">'+App.esc(f.severity)+'</span></td>'+
+        '<td><span class="truncate" style="max-width:300px;color:var(--text-primary);font-weight:500" title="'+App.esc(title)+'">'+App.esc(truncated)+'</span></td>'+
+        '<td class="truncate" style="max-width:100px">'+App.esc(f.product)+'</td>'+
+        '<td class="dimmed" style="font-size:11px">'+App.esc(f.scanner)+'</td>'+
+        '<td>'+(f.cve?'<a class="cve-link" href="https://nvd.nist.gov/vuln/detail/'+App.esc(f.cve)+'" target="_blank" onclick="event.stopPropagation()">'+App.esc(f.cve)+'</a>':'<span class="dimmed">—</span>')+'</td>'+
+        '<td>'+(f.kev?'<span style="color:var(--risk-critical);font-weight:600;font-size:11px">KEV</span>':'<span class="dimmed">—</span>')+'</td>'+
+        '<td class="mono" style="font-size:11px;color:var(--text-secondary)">'+epssStr+'</td>'+
+        '<td class="mono dimmed" style="font-size:11px">'+f.sla_hours+'h</td>'+
+        '</tr><tr class="detail-row" id="detail-'+f.rank+'"><td colspan="11">'+this._renderDetail(f)+'</td></tr>';
+    },
+    _renderDetail(f){
       var sb=f.score_components||{};
       var comps=Object.entries(sb).map(function(kv){return '<span style="margin-right:10px"><span class="dimmed">'+kv[0]+':</span> <b>'+kv[1]+'</b></span>';}).join('');
-      var drivers=(f.score_drivers||[]).map(function(d){return '<span style="margin-right:8px;color:var(--yellow)">'+svgIcon('icon-zap',12)+' '+esc(d)+'</span>';}).join('');
-      var rems=(f.remediation||[]).map(function(r){return '<li><span class="rem-kind">'+esc(r.kind)+'</span> '+esc(r.text)+'</li>';}).join('');
-      var aiRem=f.ai_remediation?'<div class="ai-box"><div class="ai-header">'+svgIcon('icon-bot')+'<span class="ai-label">AI-Generated Remediation</span></div><div class="ai-content">'+esc(f.ai_remediation)+'</div></div>':'';
-      return '<div class="detail-panel"><div class="detail-section"><div class="detail-section-title">'+svgIcon('icon-list',12)+' Finding Details</div><div class="detail-row-item"><span class="detail-key">Endpoint</span><span class="detail-val">'+esc(f.endpoint||'-')+(f.parameter?' (param: '+esc(f.parameter)+')':'')+'</span></div><div class="detail-row-item"><span class="detail-key">EPSS score</span><span class="detail-val">'+pct(f.epss_score)+' (pct '+pct(f.epss_percentile)+', trend '+(f.epss_trend>0?'+':'')+f.epss_trend+')</span></div><div class="detail-row-item"><span class="detail-key">KEV status</span><span class="detail-val">'+(f.kev?'In CISA KEV ('+esc(f.kev_date)+')':'Not in KEV')+'</span></div><div class="detail-row-item"><span class="detail-key">Exploit</span><span class="detail-val">'+(f.exploit_available?'Yes - '+esc(f.exploit_source):'Not found')+'</span></div><div class="detail-row-item"><span class="detail-key">Escalation potential</span><span class="detail-val">'+f.escalation_potential+'</span></div><div class="detail-row-item"><span class="detail-key">Owner</span><span class="detail-val">'+esc(f.owner||'-')+' \u00b7 SLA '+f.sla_hours+'h</span></div><div style="margin-top:12px;color:var(--text-secondary);font-size:12px;line-height:1.6">'+esc(f.description)+'</div></div><div class="detail-section"><div class="detail-section-title">'+svgIcon('icon-bar-chart',12)+' Score Breakdown</div><div style="font-size:12px;margin-bottom:10px;line-height:2">'+(comps||'<span class="dimmed">no breakdown</span>')+'</div><div style="margin-bottom:12px">'+drivers+'</div><div class="detail-section-title">'+svgIcon('icon-rocket',12)+' Remediation Steps</div><ul class="rem-list">'+(rems||'<li class="dimmed">No remediation data</li>')+'</ul></div>'+aiRem+'</div>';
-    }
-    function render(){
-      var rows=getFiltered();
-      var rb=$('result-badge');if(rb)rb.textContent=rows.length+' of '+F.length+' findings';
-      var tb=$('tbl-body');if(tb)tb.innerHTML=rows.map(renderRow).join('');
-    }
-    document.querySelectorAll('#tbl-head th[data-col]').forEach(function(th){
-      th.addEventListener('click',function(){
-        if(sortCol===th.dataset.col){sortDir*=-1;}else{sortCol=th.dataset.col;sortDir=-1;}
-        document.querySelectorAll('#tbl-head th').forEach(function(t){t.classList.remove('sorted');var a=t.querySelector('.sort-arrow');if(a)a.textContent='\u2195';});
-        th.classList.add('sorted');
-        var arrow=th.querySelector('.sort-arrow');if(arrow)arrow.textContent=sortDir===-1?'\u2193':'\u2191';
-        render();
+      var drivers=(f.score_drivers||[]).map(function(d){return '<span style="margin-right:8px;color:var(--risk-medium)">▸ '+App.esc(d)+'</span>';}).join('');
+      var rems=(f.remediation||[]).map(function(r){return '<li><span class="rem-kind">'+App.esc(r.kind)+'</span> '+App.esc(r.text)+'</li>';}).join('');
+      var aiRem=f.ai_remediation?'<div class="ai-box"><div class="ai-label">AI Remediation</div><div class="ai-content">'+App.esc(f.ai_remediation)+'</div></div>':'';
+      return '<div class="detail-panel"><div class="detail-section"><div class="detail-section-title">Finding Details</div>'+
+        '<div class="detail-row-item"><span class="detail-key">Endpoint</span><span class="detail-val">'+App.esc(f.endpoint||'—')+(f.parameter?' ('+App.esc(f.parameter)+')':'')+'</span></div>'+
+        '<div class="detail-row-item"><span class="detail-key">EPSS</span><span class="detail-val">'+App.pct(f.epss_score)+' (pct '+App.pct(f.epss_percentile)+')</span></div>'+
+        '<div class="detail-row-item"><span class="detail-key">KEV</span><span class="detail-val">'+(f.kev?'In CISA KEV ('+App.esc(f.kev_date)+')':'Not in KEV')+'</span></div>'+
+        '<div class="detail-row-item"><span class="detail-key">Exploit</span><span class="detail-val">'+(f.exploit_available?'Yes — '+App.esc(f.exploit_source):'Not found')+'</span></div>'+
+        '<div class="detail-row-item"><span class="detail-key">Owner</span><span class="detail-val">'+App.esc(f.owner||'—')+' · SLA '+f.sla_hours+'h</span></div>'+
+        '<div style="margin-top:var(--space-3);color:var(--text-secondary);font-size:var(--text-xs);line-height:1.6">'+App.esc(f.description)+'</div></div>'+
+        '<div class="detail-section"><div class="detail-section-title">Score Breakdown</div>'+
+        '<div style="font-size:var(--text-xs);margin-bottom:var(--space-3);line-height:2">'+(comps||'<span class="dimmed">no breakdown</span>')+'</div>'+
+        '<div style="margin-bottom:var(--space-3)">'+drivers+'</div>'+
+        '<div class="detail-section-title">Remediation Steps</div>'+
+        '<ul class="rem-list">'+(rems||'<li class="dimmed">No remediation data</li>')+'</ul></div>'+aiRem+'</div>';
+    },
+    toggleDetail(tr){
+      var rank=tr.dataset.rank;var detail=App.$('detail-'+rank);if(!detail)return;
+      var isOpen=detail.classList.contains('open');
+      document.querySelectorAll('.detail-row.open').forEach(function(r){r.classList.remove('open');});
+      document.querySelectorAll('.data-row.expanded').forEach(function(r){r.classList.remove('expanded');});
+      if(!isOpen){detail.classList.add('open');tr.classList.add('expanded');}
+    },
+    exportCSV(){
+      var rows=this.getFiltered();
+      if(!rows.length){App.toast('No findings to export','info');return;}
+      var headers=['Rank','Score','Priority','Severity','Title','Product','Scanner','CVE','KEV','EPSS','SLA','Owner'];
+      var csvRows=[headers.join(',')];
+      rows.forEach(function(f){
+        csvRows.push([f.rank,f.score,f.priority,f.severity,'\"'+(f.title||'').replace(/"/g,'""')+'\"',f.product,f.scanner,f.cve||'',f.kev?'YES':'NO',(f.epss_score*100).toFixed(1),f.sla_hours,f.owner||''].join(','));
       });
-    });
-    var searchTimer;
-    var sb=$('tbl-search');if(sb)sb.addEventListener('input',function(e){clearTimeout(searchTimer);searchTimer=setTimeout(function(){search=e.target.value;render();},300);});
-    var fp=$('f-priority');if(fp)fp.addEventListener('change',function(e){fPri=e.target.value;render();});
-    var fs=$('f-severity');if(fs)fs.addEventListener('change',function(e){fSev=e.target.value;render();});
-    var fsc=$('f-scanner');if(fsc)fsc.addEventListener('change',function(e){fScan=e.target.value;render();});
-    var fk=$('f-kev');if(fk)fk.addEventListener('change',function(e){fKev=e.target.value;render();});
+      var blob=new Blob([csvRows.join('\n')],{type:'text/csv'});
+      var a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='findings_export.csv';a.click();
+      App.toast('Exported '+rows.length+' findings','success');
+    }
+  },
 
-    // Store render function globally for CSV export
-    window._tblRender=render;
-    window._tblGetFiltered=getFiltered;
-    window._tblData=F;
+  /* ═══ ATTACK PATHS ═══ */
+  attackPaths:{
+    _zoom:null,_svgRoot:null,
+    init(){
+      if(typeof d3==='undefined'){
+        var ap=App.$('ap-container');
+        if(ap)ap.innerHTML='<div class="empty-state"><p class="empty-state-desc">D3.js not loaded. Check internet connection.</p></div>';
+        return;
+      }
+      var AP=App.data.attack_paths;var products=Object.keys(AP);
+      if(!products.length){
+        App.$('ap-container').innerHTML='<div class="empty-state"><p class="empty-state-title">No Attack Paths</p><p class="empty-state-desc">No attack paths found in this run.</p></div>';
+        return;
+      }
+      var tp=App.$('tc-paths');if(tp)tp.textContent='('+Object.values(AP).reduce(function(a,v){return a+v.length;},0)+')';
+      var sel=App.$('ap-product');
+      if(sel){
+        sel.innerHTML=products.map(function(p){return '<option value="'+App.esc(p)+'">'+App.esc(p)+'</option>';}).join('');
+        var self=this;
+        sel.addEventListener('change',function(){self.render(sel.value);});
+      }
+      this.render(products[0]);
+    },
+    render(product){
+      var paths=App.data.attack_paths[product]||[];
+      var svgEl=App.$('ap-svg'),tooltip=App.$('ap-tooltip'),container=App.$('ap-container');
+      if(!svgEl)return;
+      svgEl.innerHTML='';
+      if(!paths.length){svgEl.innerHTML='<text x="50%" y="50%" text-anchor="middle" fill="#4B5563" dy=".3em">No paths for this product</text>';return;}
+      var HIGH_IMPACT=['CWE-89','CWE-79','CWE-78','CWE-22','CWE-434','CWE-918','CWE-502','CWE-611','CWE-287','CWE-306'];
+      var nodeSet=new Map();
+      paths.forEach(function(p){
+        if(!nodeSet.has(p.from_cwe))nodeSet.set(p.from_cwe,{id:p.from_cwe,group:HIGH_IMPACT.includes(p.from_cwe)?1:0});
+        if(!nodeSet.has(p.to_cwe))nodeSet.set(p.to_cwe,{id:p.to_cwe,group:HIGH_IMPACT.includes(p.to_cwe)?2:0});
+      });
+      var nodes=[...nodeSet.values()];
+      var links=paths.map(function(p){return{source:p.from_cwe,target:p.to_cwe,prob:p.probability,desc:p.description||''};});
+      var W=svgEl.parentElement.clientWidth||900,H=480;
+      svgEl.setAttribute('viewBox','0 0 '+W+' '+H);
+      var svg=d3.select('#ap-svg');var g=svg.append('g');
+      this._zoom=d3.zoom().scaleExtent([.3,3]).on('zoom',function(e){g.attr('transform',e.transform);});
+      svg.call(this._zoom);this._svgRoot=svg;
+      var defs=svg.append('defs');
+      // Arrow markers
+      ['low','med','high'].forEach(function(t,i){
+        defs.append('marker').attr('id','arr-'+t).attr('viewBox','0 -4 8 8').attr('refX',26).attr('refY',0).attr('markerWidth',6).attr('markerHeight',6).attr('orient','auto').append('path').attr('d','M0,-4L8,0L0,4').attr('fill',['rgba(34,197,94,.7)','rgba(234,179,8,.8)','rgba(239,68,68,.8)'][i]);
+      });
+      var probClass=function(p){return p>.6?'high':p>.3?'med':'low';};
+      var probColor=function(p){return p>.6?'rgba(239,68,68,.6)':p>.3?'rgba(234,179,8,.6)':'rgba(34,197,94,.5)';};
+      // Links
+      var link=g.append('g').selectAll('line').data(links).join('line').attr('stroke',function(d){return probColor(d.prob);}).attr('stroke-width',function(d){return 1+d.prob*2;}).attr('stroke-opacity',.7).attr('marker-end',function(d){return 'url(#arr-'+probClass(d.prob)+')';});
+      // Link labels
+      var linkLabel=g.append('g').selectAll('text').data(links).join('text').text(function(d){return d.prob;}).attr('font-size',9).attr('fill','#6B7280').attr('text-anchor','middle');
+      // Nodes
+      var nodeG=g.append('g').selectAll('g').data(nodes).join('g').call(d3.drag().on('start',function(e,d){if(!e.active)sim.alphaTarget(.3).restart();d.fx=d.x;d.fy=d.y;}).on('drag',function(e,d){d.fx=e.x;d.fy=e.y;}).on('end',function(e,d){if(!e.active)sim.alphaTarget(0);d.fx=null;d.fy=null;}));
+      nodeG.append('circle').attr('r',function(d){return d.group===2?28:d.group===1?24:20;}).attr('fill',function(d){return d.group===2?'rgba(239,68,68,.12)':d.group===1?'rgba(59,130,246,.12)':'rgba(107,114,128,.08)';}).attr('stroke',function(d){return d.group===2?'#EF4444':d.group===1?'#3B82F6':'#6B7280';}).attr('stroke-width',1.5);
+      nodeG.append('text').text(function(d){return d.id.replace('CWE-','');}).attr('text-anchor','middle').attr('dy','0.35em').attr('font-size',10).attr('font-weight',600).attr('fill','#E8EAED');
+      // Tooltips
+      nodeG.on('mouseover',function(e,d){if(tooltip){tooltip.style.display='block';tooltip.innerHTML='<b>'+d.id+'</b><br>'+(d.group===2?'High-impact target':d.group===1?'Entry point':'Intermediate');}}).on('mousemove',function(e){if(!container||!tooltip)return;var r=container.getBoundingClientRect();tooltip.style.left=(e.clientX-r.left+12)+'px';tooltip.style.top=(e.clientY-r.top-30)+'px';}).on('mouseout',function(){if(tooltip)tooltip.style.display='none';});
+      link.on('mouseover',function(e,d){if(tooltip){tooltip.style.display='block';tooltip.innerHTML='<b>'+d.source.id+' → '+d.target.id+'</b><br>Probability: '+d.prob;}}).on('mousemove',function(e){if(!container||!tooltip)return;var r=container.getBoundingClientRect();tooltip.style.left=(e.clientX-r.left+12)+'px';tooltip.style.top=(e.clientY-r.top-30)+'px';}).on('mouseout',function(){if(tooltip)tooltip.style.display='none';});
+      // Simulation
+      var sim=d3.forceSimulation(nodes).force('link',d3.forceLink(links).id(function(d){return d.id;}).distance(function(d){return 100+d.prob*60;})).force('charge',d3.forceManyBody().strength(-350)).force('center',d3.forceCenter(W/2,H/2)).force('collision',d3.forceCollide(40));
+      sim.on('tick',function(){
+        link.attr('x1',function(d){return d.source.x;}).attr('y1',function(d){return d.source.y;}).attr('x2',function(d){return d.target.x;}).attr('y2',function(d){return d.target.y;});
+        linkLabel.attr('x',function(d){return(d.source.x+d.target.x)/2;}).attr('y',function(d){return(d.source.y+d.target.y)/2-6;});
+        nodeG.attr('transform',function(d){return 'translate('+d.x+','+d.y+')';});
+      });
+    },
+    reset(){if(this._svgRoot)this._svgRoot.transition().duration(500).call(this._zoom.transform,d3.zoomIdentity);}
+  },
 
-    render();
-  }catch(e){console.error('initTable:',e);}
-}
+  /* ═══ QUARANTINE ═══ */
+  buildQuarantine(){
+    var Q=App.data.quarantine;var qb=App.$('q-body');if(!qb)return;
+    qb.innerHTML=Q.length?Q.map(function(q){
+      return '<tr><td>'+App.esc(q.product)+'</td><td>'+App.esc(q.scanner)+'</td><td><span class="badge '+App.sevClass(q.severity)+'">'+App.esc(q.severity)+'</span></td><td>'+App.esc(q.title)+'</td><td>'+(q.cve?'<a class="cve-link" href="https://nvd.nist.gov/vuln/detail/'+App.esc(q.cve)+'" target="_blank">'+App.esc(q.cve)+'</a>':'<span class="dimmed">—</span>')+'</td><td class="dimmed" style="font-size:11px">'+App.esc(q.reason)+'</td></tr>';
+    }).join(''):'<tr><td colspan="6"><div class="empty-state"><p class="empty-state-title">No Quarantined Findings</p></div></td></tr>';
+  },
 
-/* ─── CSV Export ─── */
-function exportCSV(){
-  var rows=window._tblGetFiltered?window._tblGetFiltered():[];
-  if(!rows.length){showToast('No findings to export','info');return;}
-  var headers=['Rank','Score','Priority','SLA Hours','Product','Scanner','Severity','Title','CVE','CWE','KEV','EPSS Score','Endpoint','Owner'];
-  var csvRows=[headers.join(',')];
-  rows.forEach(function(f){
-    csvRows.push([f.rank,f.score,f.priority,f.sla_hours,'"'+(f.product||'').replace(/"/g,'""')+'"',f.scanner,f.severity,'"'+(f.title||'').replace(/"/g,'""')+'"',f.cve||'',f.cwe||'',f.kev?'YES':'NO',(f.epss_score*100).toFixed(1),'"'+(f.endpoint||'').replace(/"/g,'""')+'"',f.owner||''].join(','));
-  });
-  var blob=new Blob([csvRows.join('\n')],{type:'text/csv'});
-  var a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='findings_export.csv';a.click();
-  showToast('Exported '+rows.length+' findings to CSV','success');
-}
-
-function toggleDetail(tr){
-  var rank=tr.dataset.rank;var detail=$('detail-'+rank);if(!detail)return;
-  var isOpen=detail.classList.contains('open');
-  document.querySelectorAll('.detail-row.open').forEach(function(r){r.classList.remove('open');});
-  document.querySelectorAll('.data-row.expanded').forEach(function(r){r.classList.remove('expanded');});
-  if(!isOpen){detail.classList.add('open');tr.classList.add('expanded');}
-}
-
-/* ─── Quarantine ─── */
-(function buildQuarantine(){
-  try{
-    var Q=DASH.quarantine;var qb=$('q-body');if(!qb)return;
-    qb.innerHTML=Q.length?Q.map(function(q){return '<tr><td>'+esc(q.product)+'</td><td>'+esc(q.scanner)+'</td><td><span class="badge '+sevClass(q.severity)+'">'+esc(q.severity)+'</span></td><td>'+esc(q.title)+'</td><td>'+(q.cve?'<a class="cve-link" href="https://nvd.nist.gov/vuln/detail/'+esc(q.cve)+'" target="_blank">'+esc(q.cve)+'</a>':'-')+'</td><td class="dimmed" style="font-size:12px">'+esc(q.reason)+'</td></tr>';}).join(''):'<tr><td colspan="6"><div class="empty-state">'+svgIcon('icon-shield-check',32)+'<p class="empty-state-title">No Quarantined Findings</p><p class="empty-state-desc">No findings quarantined this run.</p></div></td></tr>';
-  }catch(e){console.error('buildQuarantine:',e);}
-})();
-
-/* ─── Products ─── */
-(function buildProducts(){
-  try{
-    var P=DASH.products||{};var keys=Object.keys(P);
-    var tp=$('tc-products');if(tp)tp.textContent=keys.length;
-    if(!keys.length){var ptw=$('products-table-wrap');if(ptw)ptw.innerHTML='<div class="empty-state">'+svgIcon('icon-package',32)+'<p class="empty-state-title">No Products Configured</p><p class="empty-state-desc">Add one using the form below.</p></div>';return;}
-    var rows=keys.map(function(k){
-      var p=P[k];var findings=DASH.findings.filter(function(f){return f.product===k;});
-      var p1c=findings.filter(function(f){return f.priority==='P1';}).length;
-      var p2c=findings.filter(function(f){return f.priority==='P2';}).length;
-      var repo=p.github_repo||'<span class="dimmed">not set</span>';
-      return '<tr><td><b>'+esc(p.display_name||k)+'</b><br><span class="dimmed" style="font-size:11px">'+esc(k)+'</span></td><td class="mono" style="font-size:12px">'+esc(p.url||'-')+'</td><td style="font-size:12px">'+repo+'</td><td class="dimmed" style="font-size:12px">'+esc(p.owner||'-')+'</td><td class="mono" style="font-size:12px">'+(p.asset_criticality||5)+'/10</td><td class="mono" style="font-size:12px">'+findings.length+' findings</td><td>'+(p1c>0?'<span class="badge b-p1">'+p1c+' P1</span>':'')+(p2c>0?'<span class="badge b-p2">'+p2c+' P2</span>':'')+'</td><td><button class="btn btn-secondary" style="padding:5px 12px;font-size:11px" onclick="scanProduct(\''+esc(k)+'\')">'+svgIcon('icon-search',14)+' Scan</button></td></tr>';
-    }).join('');
-    var ptw=$('products-table-wrap');if(ptw)ptw.innerHTML='<table class="data-table"><thead><tr><th>Product</th><th>URL</th><th>GitHub Repo</th><th>Owner</th><th>Criticality</th><th>Findings</th><th>P1/P2</th><th>Actions</th></tr></thead><tbody>'+rows+'</tbody></table>';
-  }catch(e){console.error('buildProducts:',e);}
-})();
-
-function addProduct(){
-  var id=$('ap-id').value.trim();var name=$('ap-name').value.trim()||id;var url=$('ap-url').value.trim();
-  var repo=$('ap-repo').value.trim();var owner=$('ap-owner').value.trim();
-  var crit=parseInt($('ap-crit').value)||5;var sens=parseInt($('ap-sens').value)||5;
-  var trivy=$('ap-trivy').value.trim();
-  if(!id||!url){var m=$('ap-msg');if(m){m.textContent='Product ID and URL are required';m.style.color='#f87171';}return;}
-  var scanners={nuclei:url,zap:url,wapiti:url};if(trivy)scanners.trivy=trivy;
-  var product={display_name:name,owner:owner||'unassigned',asset_criticality:crit,business_impact:crit,exposure:8,control_effectiveness:3,data_sensitivity:sens,url:url,github_repo:repo,scanners:scanners};
-  apiFetch('/api/products',{method:'POST',body:JSON.stringify({product_id:id,display_name:name,url:url,github_repo:repo,owner:owner||'unassigned',asset_criticality:crit,data_sensitivity:sens})}).then(function(data){
-    var m2=$('ap-msg');if(m2){m2.textContent=data.status==='created'?'Product saved to server!':'Product updated';m2.style.color='#4ade80';}
-  }).catch(function(e){
-    DASH.products=DASH.products||{};DASH.products[id]=product;
-    var m3=$('ap-msg');if(m3){m3.textContent='Saved locally (server unavailable)';m3.style.color='#facc15';}
-  });
-  var tp2=$('tc-products');if(tp2)tp2.textContent=Object.keys(DASH.products||{}).length;
-  ['ap-id','ap-name','ap-url','ap-repo','ap-owner','ap-trivy'].forEach(function(fid){var el=$(fid);if(el)el.value='';});
-  buildProducts();
-}
-
-function scanProduct(id){
-  showToast('Starting scan for '+id+'...','info');
-  apiFetch('/api/scans/start',{method:'POST',body:JSON.stringify({product:id})}).then(function(data){
-    showToast('Scan started for '+id+'. '+((data.jobs||[]).length)+' scanner(s) queued.','success');
-  }).catch(function(e){showToast('Scan failed: '+e.message,'error');});
-}
-
-/* ─── Control Center ─── */
-function loadAppStatus(){
-  apiFetch('/api/products').then(function(data){
-    var el=$('app-status-list');if(!el)return;
-    var products=data.products||{};var statuses=data.app_statuses||{};var keys=Object.keys(products);
-    if(!keys.length){el.innerHTML='<div class="empty-state" style="padding:20px">'+svgIcon('icon-activity',24)+'<p class="empty-state-desc">No products configured.</p></div>';return;}
-    el.innerHTML=keys.map(function(k){
-      var p=products[k];var s=statuses[k]||{};var isUp=s.status==='up';
-      var dotColor=isUp?'var(--green)':'var(--red)';
-      return '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);font-size:12px"><span style="width:8px;height:8px;border-radius:50%;background:'+dotColor+';flex-shrink:0"></span><span style="flex:1"><b>'+esc(p.display_name||k)+'</b> <span class="dimmed">'+esc(p.url||'')+'</span></span><span class="dimmed">'+(isUp?'UP ('+s.response_time_ms+'ms)':'DOWN')+'</span></div>';
-    }).join('');
-  }).catch(function(){});
-}
-
-var ws=null;
-function connectWebSocket(){
-  if(typeof WebSocket==='undefined')return;
-  var proto=location.protocol==='https:'?'wss:':'ws:';
-  try{
-    ws=new WebSocket(proto+'//'+location.host+'/ws/live');
-    ws.onmessage=function(e){try{var msg=JSON.parse(e.data);if(msg.type==='scan_update')handleScanUpdate(msg.data);}catch(x){}};
-    ws.onclose=function(){setTimeout(connectWebSocket,5000);};
-    ws.onerror=function(){};
-  }catch(x){}
-}
-
-function handleScanUpdate(job){
-  var el=$('scanner-progress');if(!el)return;
-  var existing=el.querySelector('[data-job="'+job.job_id+'"]');
-  if(!existing){el.innerHTML='';existing=document.createElement('div');existing.setAttribute('data-job',job.job_id);el.appendChild(existing);}
-  var statusColors={pending:'var(--text-muted)',running:'var(--blue)',completed:'var(--green)',failed:'var(--red)'};
-  var sc=statusColors[job.status]||'var(--text-muted)';
-  var elapsed=job.started_at?(job.finished_at||Date.now()/1000)-job.started_at:0;
-  existing.innerHTML='<div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border)"><span style="width:10px;height:10px;border-radius:50%;background:'+sc+';flex-shrink:0"></span><div style="flex:1"><div style="font-size:13px;font-weight:500;color:var(--text-primary)">'+esc(job.product)+' / '+esc(job.scanner)+'</div><div class="dimmed" style="font-size:11px">'+esc(job.target_url)+'</div></div><div style="text-align:right"><span class="badge" style="background:rgba(148,163,184,0.08);color:'+sc+'">'+job.status+'</span><div class="dimmed" style="font-size:10px;margin-top:2px">'+elapsed.toFixed(1)+'s</div></div></div>';
-}
-
-function triggerScanAll(){
-  showToast('Starting scan for all products...','info');
-  apiFetch('/api/products').then(function(data){
-    var products=data.products||{};var promises=Object.keys(products).map(function(pid){
-      return apiFetch('/api/scans/start',{method:'POST',body:JSON.stringify({product:pid})}).catch(function(){});
-    });
-    Promise.all(promises).then(function(){
-      showToast('Scans started for all products. Watch Scanner Progress below.','success');
-      loadScannerJobs();
-    });
-  }).catch(function(e){showToast('Failed: '+e.message,'error');});
-}
-
-function loadScannerJobs(){
-  apiFetch('/api/scans/jobs').then(function(data){
-    if(data.jobs&&data.jobs.length){
-      var el=$('scanner-progress');if(!el)return;
-      el.innerHTML=data.jobs.map(function(job){
-        var statusColors={pending:'var(--text-muted)',running:'var(--blue)',completed:'var(--green)',failed:'var(--red)'};
-        var sc=statusColors[job.status]||'var(--text-muted)';
-        var elapsed=job.started_at?(job.finished_at||Date.now()/1000)-job.started_at:0;
-        return '<div data-job="'+job.job_id+'" style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border)"><span style="width:10px;height:10px;border-radius:50%;background:'+sc+';flex-shrink:0"></span><div style="flex:1"><div style="font-size:13px;font-weight:500;color:var(--text-primary)">'+esc(job.product)+' / '+esc(job.scanner)+'</div><div class="dimmed" style="font-size:11px">'+esc(job.target_url)+'</div></div><div style="text-align:right"><span class="badge" style="background:rgba(148,163,184,0.08);color:'+sc+'">'+job.status+'</span><div class="dimmed" style="font-size:10px;margin-top:2px">'+elapsed.toFixed(1)+'s</div></div></div>';
+  /* ═══ PRODUCTS ═══ */
+  products:{
+    init(){
+      var P=App.data.products||{};var keys=Object.keys(P);
+      var tp=App.$('tc-products');if(tp)tp.textContent='('+keys.length+')';
+      if(!keys.length){
+        var ptw=App.$('products-table-wrap');
+        if(ptw)ptw.innerHTML='<div class="empty-state"><p class="empty-state-title">No Products Configured</p><p class="empty-state-desc">Add one using the form below.</p></div>';
+        return;
+      }
+      var rows=keys.map(function(k){
+        var p=P[k];var findings=App.data.findings.filter(function(f){return f.product===k;});
+        var p1c=findings.filter(function(f){return f.priority==='P1';}).length;
+        var p2c=findings.filter(function(f){return f.priority==='P2';}).length;
+        return '<tr><td><b>'+App.esc(p.display_name||k)+'</b><br><span class="dimmed" style="font-size:11px">'+App.esc(k)+'</span></td><td class="mono" style="font-size:11px">'+App.esc(p.url||'—')+'</td><td class="dimmed" style="font-size:11px">'+App.esc(p.owner||'—')+'</td><td class="mono" style="font-size:11px">'+(p.asset_criticality||5)+'/10</td><td class="mono" style="font-size:11px">'+findings.length+'</td><td>'+(p1c>0?'<span class="badge b-p1">'+p1c+'</span>':'')+(p2c>0?' <span class="badge b-p2">'+p2c+'</span>':'')+'</td><td><button class="btn btn-secondary btn-sm" onclick="App.products.scan(\''+App.esc(k)+'\')">Scan</button></td></tr>';
       }).join('');
+      var ptw=App.$('products-table-wrap');
+      if(ptw)ptw.innerHTML='<table class="data-table"><thead><tr><th>Product</th><th>URL</th><th>Owner</th><th>Criticality</th><th>Findings</th><th>P1/P2</th><th>Actions</th></tr></thead><tbody>'+rows+'</tbody></table>';
+    },
+    add(){
+      var id=App.$('ap-id').value.trim();var name=App.$('ap-name').value.trim()||id;var url=App.$('ap-url').value.trim();
+      var repo=App.$('ap-repo').value.trim();var owner=App.$('ap-owner').value.trim();
+      var crit=parseInt(App.$('ap-crit').value)||5;var sens=parseInt(App.$('ap-sens').value)||5;
+      var trivy=App.$('ap-trivy').value.trim();
+      if(!id||!url){var m=App.$('ap-msg');if(m){m.textContent='Product ID and URL are required';m.style.color='var(--risk-critical)';}return;}
+      App.apiFetch('/api/products',{method:'POST',body:JSON.stringify({product_id:id,display_name:name,url:url,github_repo:repo,owner:owner||'unassigned',asset_criticality:crit,data_sensitivity:sens})}).then(function(data){
+        var m2=App.$('ap-msg');if(m2){m2.textContent=data.status==='created'?'Product saved!':'Updated';m2.style.color='var(--risk-low)';}
+      }).catch(function(){
+        App.data.products=App.data.products||{};
+        App.data.products[id]={display_name:name,owner:owner||'unassigned',asset_criticality:crit,url:url,github_repo:repo};
+        var m3=App.$('ap-msg');if(m3){m3.textContent='Saved locally';m3.style.color='var(--risk-medium)';}
+      });
+      ['ap-id','ap-name','ap-url','ap-repo','ap-owner','ap-trivy'].forEach(function(fid){var el=App.$(fid);if(el)el.value='';});
+      this.init();
+    },
+    scan(id){
+      App.toast('Starting scan for '+id+'...','info');
+      App.apiFetch('/api/scans/start',{method:'POST',body:JSON.stringify({product:id})}).then(function(data){
+        App.toast('Scan started. '+(data.jobs||[]).length+' scanner(s) queued.','success');
+      }).catch(function(e){App.toast('Scan failed: '+e.message,'error');});
     }
-  }).catch(function(){});
-}
+  },
 
-function runPipeline(){
-  showToast('Running 8-stage pipeline...','info');
-  apiFetch('/api/pipeline/run',{method:'POST',body:JSON.stringify({skip_enrich:true,skip_ai:true})}).then(function(){
-    showToast('Pipeline started in background. Check status periodically.','success');
-    pollPipelineStatus();
-  }).catch(function(e){showToast('Pipeline failed: '+e.message,'error');});
-}
-
-function pollPipelineStatus(){
-  var check=function(){
-    apiFetch('/api/pipeline/status').then(function(data){
-      if(data.running){showToast('Pipeline is running...','info');setTimeout(check,3000);}
-      else{showToast('Pipeline complete! Refresh to see updated results.','success');}
-    }).catch(function(){});
-  };check();
-}
-
-function createTickets(){
-  showToast('Creating GitHub Issues for findings above threshold...','info');
-  apiFetch('/api/tickets/create?threshold=60',{method:'POST'}).then(function(data){
-    var results=data.results||{};var total=0;Object.values(results).forEach(function(r){total+=(r.created||0);});
-    showToast('Created '+total+' GitHub Issues across '+Object.keys(results).length+' products.','success');
-  }).catch(function(e){showToast('Ticket creation failed: '+e.message,'error');});
-}
-
-function checkDocker(){
-  showToast('Checking Docker...','info');
-  apiFetch('/api/scanners/status').then(function(data){
-    if(data.docker_available){showToast('Docker is running. Active jobs: '+data.active_jobs,'success');}
-    else{showToast('Docker is not available. Install Docker Desktop.','error');}
-  }).catch(function(e){showToast('Cannot connect to server: '+e.message,'error');});
-}
-
-/* ─── Attack Paths (D3) ─── */
-var HIGH_IMPACT=['CWE-89','CWE-79','CWE-78','CWE-22','CWE-434','CWE-918','CWE-502','CWE-611','CWE-287','CWE-306'];
-var apZoom,apSvgRoot;
-
-function initD3(){
-  if(typeof d3==='undefined'){var ap=$('ap-container');if(ap)ap.innerHTML='<div class="ap-no-data">'+svgIcon('icon-network',32)+'<br>D3.js not loaded. Check internet connection.</div>';return;}
-  var AP=DASH.attack_paths;var products=Object.keys(AP);
-  if(!products.length){$('ap-container').innerHTML='<div class="empty-state">'+svgIcon('icon-network',32)+'<p class="empty-state-title">No Attack Paths</p><p class="empty-state-desc">No attack paths found in this run.</p></div>';return;}
-  var sel=$('ap-product');if(!sel)return;
-  sel.innerHTML=products.map(function(p){return '<option value="'+esc(p)+'">'+esc(p)+'</option>';}).join('');
-  var tp=$('tc-paths');if(tp)tp.textContent=Object.values(AP).reduce(function(a,v){return a+v.length;},0);
-  sel.addEventListener('change',function(){renderD3(sel.value);});
-  renderD3(products[0]);
-}
-
-function renderD3(product){
-  var paths=DASH.attack_paths[product]||[];
-  var svgEl=$('ap-svg');var tooltip=$('ap-tooltip');var container=$('ap-container');
-  if(!svgEl)return;
-  svgEl.innerHTML='';
-  if(!paths.length){svgEl.innerHTML='<text x="50%" y="50%" text-anchor="middle" fill="#64748b" dy=".3em">No paths for this product</text>';return;}
-  var nodeSet=new Map();
-  paths.forEach(function(p){
-    if(!nodeSet.has(p.from_cwe))nodeSet.set(p.from_cwe,{id:p.from_cwe,group:HIGH_IMPACT.includes(p.from_cwe)?1:0});
-    if(!nodeSet.has(p.to_cwe))nodeSet.set(p.to_cwe,{id:p.to_cwe,group:HIGH_IMPACT.includes(p.to_cwe)?2:0});
-  });
-  var nodes=[...nodeSet.values()];
-  var links=paths.map(function(p){return {source:p.from_cwe,target:p.to_cwe,prob:p.probability,desc:p.description||''};});
-  var W=svgEl.parentElement.clientWidth||900,H=540;
-  svgEl.setAttribute('viewBox','0 0 '+W+' '+H);
-  var svg=d3.select('#ap-svg');var g=svg.append('g');
-  apZoom=d3.zoom().scaleExtent([.3,3]).on('zoom',function(e){g.attr('transform',e.transform);});
-  svg.call(apZoom);apSvgRoot=svg;
-  var defs=svg.append('defs');
-  ['low','med','high'].forEach(function(t,i){
-    defs.append('marker').attr('id','arr-'+t).attr('viewBox','0 -4 8 8').attr('refX',26).attr('refY',0).attr('markerWidth',6).attr('markerHeight',6).attr('orient','auto').append('path').attr('d','M0,-4L8,0L0,4').attr('fill',['rgba(74,222,128,.7)','rgba(250,204,21,.8)','rgba(248,113,113,.8)'][i]);
-  });
-  var probClass=function(p){return p>.6?'high':p>.3?'med':'low';};
-  var probColor=function(p){return p>.6?'rgba(248,113,113,.7)':p>.3?'rgba(250,204,21,.7)':'rgba(74,222,128,.6)';};
-  var link=g.append('g').selectAll('line').data(links).join('line').attr('stroke',function(d){return probColor(d.prob);}).attr('stroke-width',function(d){return 1+d.prob*3;}).attr('stroke-opacity',.7).attr('marker-end',function(d){return 'url(#arr-'+probClass(d.prob)+')';});
-  var linkLabel=g.append('g').selectAll('text').data(links).join('text').text(function(d){return 'p='+d.prob;}).attr('font-size',9).attr('fill','#64748b').attr('text-anchor','middle');
-  var nodeG=g.append('g').selectAll('g').data(nodes).join('g').call(d3.drag().on('start',function(e,d){if(!e.active)sim.alphaTarget(.3).restart();d.fx=d.x;d.fy=d.y;}).on('drag',function(e,d){d.fx=e.x;d.fy=e.y;}).on('end',function(e,d){if(!e.active)sim.alphaTarget(0);d.fx=null;d.fy=null;}));
-  var filter=defs.append('filter').attr('id','glow');
-  filter.append('feGaussianBlur').attr('stdDeviation','4').attr('result','blur');
-  var feMerge=filter.append('feMerge');feMerge.append('feMergeNode').attr('in','blur');feMerge.append('feMergeNode').attr('in','SourceGraphic');
-  nodeG.append('circle').attr('r',function(d){return d.group===2?32:d.group===1?28:22;}).attr('fill',function(d){return d.group===2?'rgba(248,113,113,.15)':d.group===1?'rgba(251,146,60,.12)':'rgba(96,165,250,.12)';}).attr('stroke',function(d){return d.group===2?'#f87171':d.group===1?'#fb923c':'#60a5fa';}).attr('stroke-width',2).attr('filter','url(#glow)');
-  nodeG.append('text').text(function(d){return d.id.replace('CWE-','');}).attr('text-anchor','middle').attr('dy','-.2em').attr('font-size',10).attr('font-weight',700).attr('fill','#f1f5f9');
-  nodeG.append('text').text('CWE').attr('text-anchor','middle').attr('dy','1em').attr('font-size',8).attr('fill','#64748b');
-  nodeG.on('mouseover',function(e,d){if(tooltip){tooltip.style.display='block';tooltip.innerHTML='<b>'+d.id+'</b><br>'+(d.group===2?'High-impact exploitation target':d.group===1?'Attack entry point':'Intermediate escalation node');}}).on('mousemove',function(e){if(!container||!tooltip)return;var r=container.getBoundingClientRect();tooltip.style.left=(e.clientX-r.left+12)+'px';tooltip.style.top=(e.clientY-r.top-30)+'px';}).on('mouseout',function(){if(tooltip)tooltip.style.display='none';});
-  link.on('mouseover',function(e,d){if(tooltip){tooltip.style.display='block';tooltip.innerHTML='<b>'+d.source.id+' to '+d.target.id+'</b><br>Probability: '+d.prob+'<br>'+esc(d.desc).substring(0,100);}}).on('mousemove',function(e){if(!container||!tooltip)return;var r=container.getBoundingClientRect();tooltip.style.left=(e.clientX-r.left+12)+'px';tooltip.style.top=(e.clientY-r.top-30)+'px';}).on('mouseout',function(){if(tooltip)tooltip.style.display='none';});
-  var sim=d3.forceSimulation(nodes).force('link',d3.forceLink(links).id(function(d){return d.id;}).distance(function(d){return 100+d.prob*80;})).force('charge',d3.forceManyBody().strength(-420)).force('center',d3.forceCenter(W/2,H/2)).force('collision',d3.forceCollide(45));
-  sim.on('tick',function(){
-    link.attr('x1',function(d){return d.source.x;}).attr('y1',function(d){return d.source.y;}).attr('x2',function(d){return d.target.x;}).attr('y2',function(d){return d.target.y;});
-    linkLabel.attr('x',function(d){return(d.source.x+d.target.x)/2;}).attr('y',function(d){return(d.source.y+d.target.y)/2-6;});
-    nodeG.attr('transform',function(d){return 'translate('+d.x+','+d.y+')';});
-  });
-}
-
-function apReset(){if(apSvgRoot)apSvgRoot.transition().duration(500).call(apZoom.transform,d3.zoomIdentity);}
-
-/* ─── Lifecycle Tab ─── */
-(function initLifecycle(){
-  try{
-    var LC=DASH.lifecycle||{};
-    var tracked=LC.findings||[];
-    var statusCounts=LC.status_counts||{};
-    var overdueCount=LC.overdue_count||0;
-    var statusColors={open:'#fb923c',in_progress:'#60a5fa',fixed:'#4ade80',verified:'#22d3ee',accepted:'#64748b',false_positive:'#f87171',risk_accepted:'#64748b'};
-    var openCount=statusCounts.open||0;
-    var inProgCount=statusCounts.in_progress||0;
-    var fixedCount=(statusCounts.fixed||0)+(statusCounts.verified||0);
-    var lckg=$('lc-kpi-grid');
-    if(lckg)lckg.innerHTML=[
-      {v:tracked.length,l:'Total Tracked',cls:'',icon:'icon-search'},
-      {v:openCount,l:'Open',cls:'warn',icon:'icon-unlock'},
-      {v:inProgCount,l:'In Progress',cls:'',icon:'icon-clock'},
-      {v:fixedCount,l:'Fixed / Verified',cls:'success',icon:'icon-check'},
-      {v:overdueCount,l:'SLA Breached',cls:'danger',icon:'icon-alert'},
-    ].map(function(c,i){return '<div class="kpi-card '+c.cls+'"><div class="kpi-header"><div class="kpi-icon">'+svgIcon(c.icon)+'</div></div><div class="kpi-value">'+c.v+'</div><div class="kpi-label">'+c.l+'</div></div>';}).join('');
-    var tcl=$('tc-lifecycle');if(tcl)tcl.textContent=tracked.length;
-    if(tracked.length>0){
-      var rows=tracked.slice(0,100).map(function(f){
-        var sc2=statusColors[f.status]||'#64748b';
-        var isBreach=f.sla_deadline&&new Date(f.sla_deadline)<new Date()&&(f.status==='open'||f.status==='in_progress');
-        return '<tr><td>'+esc(f.product)+'</td><td><span class="badge '+sevClass(f.severity)+'">'+esc(f.severity)+'</span></td><td style="max-width:200px" class="truncate primary">'+esc(f.title)+'</td><td class="no-wrap">'+(f.cve?esc(f.cve):'-')+'</td><td class="no-wrap"><span class="badge" style="background:'+sc2+'22;color:'+sc2+';border:1px solid '+sc2+'44">'+f.status.replace('_',' ')+'</span></td><td class="no-wrap '+(isBreach?'':'dimmed')+'" style="font-size:11px;'+(isBreach?'color:var(--red);font-weight:600':'')+'">'+(isBreach?'BREACHED':'OK')+'</td><td class="no-wrap" style="font-size:11px">'+esc(f.owner||'-')+'</td><td class="no-wrap" style="font-size:11px">'+esc(f.sla_hours||0)+'h</td></tr>';
-      }).join('');
-      var lctw=$('lc-table-wrap');if(lctw)lctw.innerHTML='<table class="data-table"><thead><tr><th>Product</th><th>Severity</th><th>Title</th><th>CVE</th><th>Status</th><th>SLA</th><th>Owner</th><th>SLA Hours</th></tr></thead><tbody>'+rows+'</tbody></table>';
-    }else{
-      var lctw2=$('lc-table-wrap');if(lctw2)lctw2.innerHTML='<div class="empty-state">'+svgIcon('icon-refresh',32)+'<p class="empty-state-title">No Lifecycle Data</p><p class="empty-state-desc">No findings tracked yet. Run the pipeline to start lifecycle tracking.</p></div>';
+  /* ═══ CONTROL ═══ */
+  control:{
+    loadStatus(){
+      App.apiFetch('/api/products').then(function(data){
+        var el=App.$('app-status-list');if(!el)return;
+        var products=data.products||{};var statuses=data.app_statuses||{};var keys=Object.keys(products);
+        if(!keys.length){el.innerHTML='<p class="dimmed" style="font-size:var(--text-xs)">No products configured.</p>';return;}
+        el.innerHTML=keys.map(function(k){
+          var p=products[k];var s=statuses[k]||{};var isUp=s.status==='up';
+          return '<div style="display:flex;align-items:center;gap:var(--space-2);padding:var(--space-2) 0;border-bottom:1px solid var(--border-subtle);font-size:var(--text-xs)"><span class="status-dot" style="background:'+(isUp?'var(--risk-low)':'var(--risk-critical)')+'"></span><span style="flex:1"><b style="color:var(--text-primary)">'+App.esc(p.display_name||k)+'</b> <span class="dimmed">'+App.esc(p.url||'')+'</span></span><span class="dimmed">'+(isUp?'UP ('+s.response_time_ms+'ms)':'DOWN')+'</span></div>';
+        }).join('');
+      }).catch(function(){});
+    },
+    connectWS(){
+      if(typeof WebSocket==='undefined')return;
+      var self=this;
+      var proto=location.protocol==='https:'?'wss:':'ws:';
+      try{
+        App.state.ws=new WebSocket(proto+'//'+location.host+'/ws/live');
+        App.state.ws.onmessage=function(e){try{var msg=JSON.parse(e.data);if(msg.type==='scan_update')self._handleScanUpdate(msg.data);}catch(x){}};
+        App.state.ws.onclose=function(){setTimeout(function(){self.connectWS();},5000);};
+        App.state.ws.onerror=function(){};
+      }catch(x){}
+    },
+    _handleScanUpdate(job){
+      var el=App.$('scanner-progress');if(!el)return;
+      var existing=el.querySelector('[data-job="'+job.job_id+'"]');
+      if(!existing){el.innerHTML='';existing=document.createElement('div');existing.setAttribute('data-job',job.job_id);el.appendChild(existing);}
+      var statusColors={pending:'var(--text-muted)',running:'var(--risk-info)',completed:'var(--risk-low)',failed:'var(--risk-critical)'};
+      var sc=statusColors[job.status]||'var(--text-muted)';
+      var elapsed=job.started_at?(job.finished_at||Date.now()/1000)-job.started_at:0;
+      existing.innerHTML='<div style="display:flex;align-items:center;gap:var(--space-3);padding:var(--space-2) 0;border-bottom:1px solid var(--border-subtle)"><span class="status-dot" style="background:'+sc+'"></span><div style="flex:1"><div style="font-size:var(--text-xs);font-weight:500;color:var(--text-primary)">'+App.esc(job.product)+' / '+App.esc(job.scanner)+'</div><div class="dimmed" style="font-size:10px">'+App.esc(job.target_url)+'</div></div><div style="text-align:right"><span style="font-size:10px;color:'+sc+'">'+job.status+'</span><div class="dimmed" style="font-size:10px">'+elapsed.toFixed(1)+'s</div></div></div>';
+    },
+    loadJobs(){
+      App.apiFetch('/api/scans/jobs').then(function(data){
+        if(data.jobs&&data.jobs.length){
+          var el=App.$('scanner-progress');if(!el)return;
+          el.innerHTML=data.jobs.map(function(job){
+            var statusColors={pending:'var(--text-muted)',running:'var(--risk-info)',completed:'var(--risk-low)',failed:'var(--risk-critical)'};
+            var sc=statusColors[job.status]||'var(--text-muted)';
+            var elapsed=job.started_at?(job.finished_at||Date.now()/1000)-job.started_at:0;
+            return '<div data-job="'+job.job_id+'" style="display:flex;align-items:center;gap:var(--space-3);padding:var(--space-2) 0;border-bottom:1px solid var(--border-subtle)"><span class="status-dot" style="background:'+sc+'"></span><div style="flex:1"><div style="font-size:var(--text-xs);font-weight:500;color:var(--text-primary)">'+App.esc(job.product)+' / '+App.esc(job.scanner)+'</div></div><span style="font-size:10px;color:'+sc+'">'+job.status+'</span></div>';
+          }).join('');
+        }
+      }).catch(function(){});
+    },
+    scanAll(){
+      App.toast('Starting scan for all products...','info');
+      App.apiFetch('/api/products').then(function(data){
+        var products=data.products||{};
+        Promise.all(Object.keys(products).map(function(pid){
+          return App.apiFetch('/api/scans/start',{method:'POST',body:JSON.stringify({product:pid})}).catch(function(){});
+        })).then(function(){
+          App.toast('Scans started for all products.','success');
+        });
+      }).catch(function(e){App.toast('Failed: '+e.message,'error');});
+    },
+    runPipeline(){
+      App.toast('Running pipeline...','info');
+      App.apiFetch('/api/pipeline/run',{method:'POST',body:JSON.stringify({skip_enrich:true,skip_ai:true})}).then(function(){
+        App.toast('Pipeline started. Check status periodically.','success');
+      }).catch(function(e){App.toast('Pipeline failed: '+e.message,'error');});
+    },
+    createTickets(){
+      App.toast('Creating GitHub Issues...','info');
+      App.apiFetch('/api/tickets/create?threshold=60',{method:'POST'}).then(function(data){
+        var results=data.results||{};var total=0;Object.values(results).forEach(function(r){total+=(r.created||0);});
+        App.toast('Created '+total+' Issues.','success');
+      }).catch(function(e){App.toast('Failed: '+e.message,'error');});
+    },
+    checkDocker(){
+      App.toast('Checking Docker...','info');
+      App.apiFetch('/api/scanners/status').then(function(data){
+        if(data.docker_available){App.toast('Docker running. Active jobs: '+data.active_jobs,'success');}
+        else{App.toast('Docker not available.','error');}
+      }).catch(function(e){App.toast('Cannot connect: '+e.message,'error');});
     }
-    var overdue=LC.overdue_findings||[];
-    var lcbl=$('lc-breached-list');
-    if(lcbl)lcbl.innerHTML=overdue.length?overdue.slice(0,20).map(function(f){
-      return '<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);font-size:12px"><span style="color:var(--red);font-weight:700">'+svgIcon('icon-alert',16)+'</span><span style="flex:1"><b style="color:var(--text-primary)">'+esc((f.title||'').substring(0,60))+'</b> <span class="dimmed">'+esc(f.product)+'</span></span><span class="badge b-p1">SLA BREACHED</span></div>';
-    }).join(''):'<div class="empty-state" style="padding:20px">'+svgIcon('icon-check',24)+'<p class="empty-state-desc">No SLA breaches detected.</p></div>';
-  }catch(e){console.error('initLifecycle:',e);}
-})();
+  },
 
-/* ─── Dedup Analytics Tab ─── */
-(function initDedup(){
-  try{
-    var S=DASH.summary;
-    var DA=DASH.dedup_analytics||{};
-    var noiseRm=S.raw_findings>0?((S.raw_findings-S.final_findings)/S.raw_findings*100).toFixed(1):0;
-    var dkg=$('dedup-kpi-grid');
-    if(dkg)dkg.innerHTML=[
-      {v:S.raw_findings,l:'Raw Findings',cls:'',icon:'icon-search'},
-      {v:S.unique_findings,l:'After Dedup',cls:'',icon:'icon-shuffle'},
-      {v:S.dedup_pct+'%',l:'Dedup Rate',cls:'success',icon:'icon-trend-down'},
-      {v:noiseRm+'%',l:'Total Noise Removed',cls:'',icon:'icon-target'},
-      {v:(DA.per_scanner_counts?Object.keys(DA.per_scanner_counts).length:0)+' scanners',l:'Scanner Sources',cls:'',icon:'icon-search'},
-      {v:(DA.cross_scanner_redundancy||[]).length,l:'Cross-Scanner Overlaps',cls:'warn',icon:'icon-link'},
-    ].map(function(c,i){return '<div class="kpi-card '+c.cls+'"><div class="kpi-header"><div class="kpi-icon">'+svgIcon(c.icon)+'</div></div><div class="kpi-value">'+c.v+'</div><div class="kpi-label">'+c.l+'</div></div>';}).join('');
-    var scannerCounts=DA.per_scanner_counts||{};
-    if(Object.keys(scannerCounts).length===0){
-      var F=DASH.findings;var scanMap={};F.forEach(function(f){scanMap[f.scanner]=(scanMap[f.scanner]||0)+1;});
-      scannerCounts=scanMap;
+  /* ═══ LIFECYCLE ═══ */
+  lifecycle:{
+    init(){
+      var LC=App.data.lifecycle||{};
+      var tracked=LC.findings||[];
+      var statusCounts=LC.status_counts||{};
+      var overdueCount=LC.overdue_count||0;
+      var openCount=statusCounts.open||0;
+      var inProgCount=statusCounts.in_progress||0;
+      var fixedCount=(statusCounts.fixed||0)+(statusCounts.verified||0);
+      // Summary line
+      var sl=App.$('lc-summary');
+      if(sl)sl.innerHTML='Tracking <b style="color:var(--text-primary)">'+tracked.length+'</b> · <b style="color:var(--risk-high)">'+openCount+'</b> open · <b style="color:var(--risk-info)">'+inProgCount+'</b> in progress · <b style="color:var(--risk-low)">'+fixedCount+'</b> fixed · <b style="color:var(--risk-critical)">'+overdueCount+'</b> breached';
+      var tcl=App.$('tc-lifecycle');if(tcl)tcl.textContent='('+tracked.length+')';
+      // Table
+      if(tracked.length>0){
+        var statusColors={open:'var(--risk-high)',in_progress:'var(--risk-info)',fixed:'var(--risk-low)',verified:'#22D3EE',accepted:'var(--text-muted)',false_positive:'var(--risk-critical)',risk_accepted:'var(--text-muted)'};
+        var statusBorders={open:'var(--risk-high)',in_progress:'var(--risk-info)',fixed:'var(--risk-low)',verified:'#22D3EE',accepted:'var(--text-muted)'};
+        var rows=tracked.slice(0,100).map(function(f){
+          var sc=statusColors[f.status]||'var(--text-muted)';
+          var bc=statusBorders[f.status]||'var(--text-muted)';
+          var isBreach=f.sla_deadline&&new Date(f.sla_deadline)<new Date()&&(f.status==='open'||f.status==='in_progress');
+          return '<tr><td>'+App.esc(f.product)+'</td><td><span class="badge '+App.sevClass(f.severity)+'">'+App.esc(f.severity)+'</span></td><td class="truncate" style="max-width:200px;color:var(--text-primary);font-weight:500">'+App.esc(f.title)+'</td><td class="no-wrap">'+(f.cve?App.esc(f.cve):'<span class="dimmed">—</span>')+'</td><td><span class="status-border" style="border-color:'+bc+';color:'+sc+';font-size:11px">'+f.status.replace('_',' ')+'</span></td><td class="no-wrap" style="font-size:11px;'+(isBreach?'color:var(--risk-critical);font-weight:700':'color:var(--text-muted)')+'">'+(isBreach?'BREACHED':'OK')+'</td><td class="dimmed" style="font-size:11px">'+App.esc(f.owner||'—')+'</td></tr>';
+        }).join('');
+        var lctw=App.$('lc-table-wrap');if(lctw)lctw.innerHTML='<table class="data-table"><thead><tr><th>Product</th><th>Severity</th><th>Title</th><th>CVE</th><th>Status</th><th>SLA</th><th>Owner</th></tr></thead><tbody>'+rows+'</tbody></table>';
+      }else{
+        var lctw2=App.$('lc-table-wrap');if(lctw2)lctw2.innerHTML='<div class="empty-state"><p class="empty-state-title">No Lifecycle Data</p><p class="empty-state-desc">Run the pipeline to start tracking.</p></div>';
+      }
+      // SLA breaches
+      var overdue=LC.overdue_findings||[];
+      var lcbl=App.$('lc-breached-list');
+      if(lcbl)lcbl.innerHTML=overdue.length?overdue.slice(0,20).map(function(f){
+        return '<div style="display:flex;align-items:center;gap:var(--space-2);padding:var(--space-2) 0;border-bottom:1px solid var(--border-subtle);font-size:var(--text-xs)"><span style="color:var(--risk-critical);font-weight:700">!</span><span style="flex:1"><b style="color:var(--text-primary)">'+App.esc((f.title||'').substring(0,60))+'</b> <span class="dimmed">'+App.esc(f.product)+'</span></span><span class="badge b-p1">BREACHED</span></div>';
+      }).join(''):'<p class="dimmed" style="font-size:var(--text-xs);padding:var(--space-3)">No SLA breaches detected.</p>';
     }
-    var scanKeys=Object.keys(scannerCounts).sort(function(a,b){return scannerCounts[b]-scannerCounts[a];});
-    if(HAS_CHART&&$('c-dedup-scanner')){
-      new Chart($('c-dedup-scanner'),{type:'bar',data:{labels:scanKeys,datasets:[{label:'Pre-dedup findings',data:scanKeys.map(function(k){return scannerCounts[k];}),backgroundColor:['rgba(96,165,250,.7)','rgba(34,211,238,.7)','rgba(250,204,21,.7)','rgba(248,113,113,.7)','rgba(129,140,248,.7)'],borderWidth:0,borderRadius:6}]},options:{...cardCfg,scales:{y:{grid:{color:gridColor},ticks:{color:'#94a3b8'}},x:{grid:{display:false},ticks:{color:'#94a3b8'}}},plugins:{legend:{display:false}}}});
-    }
-    var overlaps=DA.cross_scanner_redundancy||[];
-    if(HAS_CHART&&$('c-dedup-overlap')&&overlaps.length>0){
-      var topOverlaps=overlaps.slice(0,10);
-      new Chart($('c-dedup-overlap'),{type:'bar',data:{labels:topOverlaps.map(function(o){return(o.cve||o.vulnerability||'').substring(0,25);}),datasets:[{label:'Scanners detecting',data:topOverlaps.map(function(o){return(o.scanners_found_it||[]).length;}),backgroundColor:'rgba(251,146,60,.7)',borderWidth:0,borderRadius:6}]},options:{...cardCfg,indexAxis:'y',scales:{x:{grid:{color:gridColor},ticks:{color:'#94a3b8'},title:{display:true,text:'# scanners',color:'#64748b'}},y:{grid:{display:false},ticks:{color:'#94a3b8',font:{size:10}}}},plugins:{legend:{display:false}}}});
-    }else if($('c-dedup-overlap')){
-      var cel=$('c-dedup-overlap');if(cel&&cel.parentElement)cel.parentElement.innerHTML='<div class="chart-header">'+svgIcon('icon-link')+'<span class="chart-title">Cross-Scanner Redundancy</span></div><div class="empty-state" style="height:200px">'+svgIcon('icon-link',32)+'<p class="empty-state-desc">No cross-scanner overlaps detected in this run.</p></div>';
-    }
-    var overlapRows=overlaps.map(function(o){
-      var scanners=(o.scanners_found_it||[]).map(function(s){return '<span class="badge" style="background:var(--cyan-dim);color:var(--cyan);margin-right:4px">'+esc(s)+'</span>';}).join('');
-      return '<tr><td class="no-wrap">'+(o.cve?'<a class="cve-link" href="https://nvd.nist.gov/vuln/detail/'+esc(o.cve)+'" target="_blank">'+esc(o.cve)+'</a>':'<span class="dimmed">-</span>')+'</td><td>'+scanners+'</td><td style="max-width:200px" class="truncate">'+esc(o.vulnerability||'-')+'</td><td class="no-wrap">'+esc(o.product||'-')+'</td><td class="no-wrap dimmed">'+esc(o.canonical_source||'-')+'</td></tr>';
-    }).join('');
-    var dot=$('dedup-overlap-table');
-    if(dot)dot.innerHTML=overlapRows?'<table class="data-table"><thead><tr><th>CVE</th><th>Detecting Scanners</th><th>Vulnerability</th><th>Product</th><th>Canonical</th></tr></thead><tbody>'+overlapRows+'</tbody></table>':'<div class="empty-state" style="padding:20px">'+svgIcon('icon-shuffle',24)+'<p class="empty-state-desc">No cross-scanner overlaps detected. Each vulnerability was found by only one scanner.</p></div>';
-  }catch(e){console.error('initDedup:',e);}
-})();
+  },
 
-/* ─── Integrations Tab ─── */
-async function testJira(){
-  var el=$('jira-status');if(!el)return;
-  el.innerHTML='<span class="dimmed">Testing connection...</span>';
-  try{var data=await apiFetch('/api/jira/test');el.innerHTML=data.connected?'<span style="color:var(--green)">Connected to '+esc(data.url||'Jira')+'</span>':'<span style="color:var(--red)">'+esc(data.error||'Not configured')+'</span>';}catch(e){el.innerHTML='<span style="color:var(--red)">'+esc(e.message)+'</span>';}
-}
-async function createJiraIssues(){
-  var el=$('jira-status');if(!el)return;
-  el.innerHTML='<span class="dimmed">Creating issues...</span>';
-  try{var data=await apiFetch('/api/jira/create?threshold=60',{method:'POST'});el.innerHTML='<span style="color:var(--green)">Created '+(data.created||0)+' issues</span>';}catch(e){el.innerHTML='<span style="color:var(--red)">'+esc(e.message)+'</span>';}
-}
-async function testDefectDojo(){
-  var el=$('dd-status');if(!el)return;
-  el.innerHTML='<span class="dimmed">Testing connection...</span>';
-  try{var data=await apiFetch('/api/defectdojo/test');el.innerHTML=data.connected?'<span style="color:var(--green)">Connected to '+esc(data.url||'DefectDojo')+'</span>':'<span style="color:var(--red)">'+esc(data.error||'Not configured')+'</span>';}catch(e){el.innerHTML='<span style="color:var(--red)">'+esc(e.message)+'</span>';}
-}
-async function importDefectDojo(){
-  var el=$('dd-status');if(!el)return;
-  el.innerHTML='<span class="dimmed">Importing findings...</span>';
-  try{var data=await apiFetch('/api/defectdojo/import?product_name=all',{method:'POST'});el.innerHTML='<span style="color:var(--green)">'+esc(data.message||'Imported')+'</span>';}catch(e){el.innerHTML='<span style="color:var(--red)">'+esc(e.message)+'</span>';}
-}
-async function saveApiKeys(){
-  var el=$('apikey-status');if(!el)return;
-  el.innerHTML='<span class="dimmed">Saving API keys...</span>';
-  var keys={};
-  var groq=$('ak-groq');if(groq&&groq.value.trim())keys.groq_api_key=groq.value.trim();
-  var nvd=$('ak-nvd');if(nvd&&nvd.value.trim())keys.nvd_api_key=nvd.value.trim();
-  var gh=$('ak-github');if(gh&&gh.value.trim())keys.github_token=gh.value.trim();
-  var jurl=$('ak-jira-url');if(jurl&&jurl.value.trim())keys.jira_url=jurl.value.trim();
-  var juser=$('ak-jira-user');if(juser&&juser.value.trim())keys.jira_user=juser.value.trim();
-  var jtoken=$('ak-jira-token');if(jtoken&&jtoken.value.trim())keys.jira_token=jtoken.value.trim();
-  var jproj=$('ak-jira-project');if(jproj&&jproj.value.trim())keys.jira_project=jproj.value.trim();
-  var ddurl=$('ak-dd-url');if(ddurl&&ddurl.value.trim())keys.defectdojo_url=ddurl.value.trim();
-  var ddkey=$('ak-dd-key');if(ddkey&&ddkey.value.trim())keys.defectdojo_api_key=ddkey.value.trim();
-  try{await apiFetch('/api/config/keys',{method:'POST',body:JSON.stringify(keys)});el.innerHTML='<span style="color:var(--green)">API keys saved! Restart server to apply.</span>';}catch(e){el.innerHTML='<span style="color:var(--red)">'+esc(e.message)+'</span>';}
-}
+  /* ═══ DEDUP ═══ */
+  dedup:{
+    init(){
+      var S=App.data.summary;
+      var DA=App.data.dedup_analytics||{};
+      var noiseRm=S.raw_findings>0?((S.raw_findings-S.final_findings)/S.raw_findings*100).toFixed(1):'0';
+      var overlapCount=(DA.cross_scanner_redundancy||[]).length;
+      // Summary line
+      var sl=App.$('dedup-summary-line');
+      if(sl)sl.innerHTML='<span style="font-size:var(--text-xs);color:var(--text-tertiary)"><b style="color:var(--text-primary)">'+S.raw_findings+'</b> raw → <b style="color:var(--text-primary)">'+S.unique_findings+'</b> unique ('+S.dedup_pct+'% dedup) · <b style="color:var(--risk-medium)">'+overlapCount+'</b> overlaps found</span>';
+      // Charts
+      var scannerCounts=DA.per_scanner_counts||{};
+      if(Object.keys(scannerCounts).length===0){
+        var F=App.data.findings;var scanMap={};F.forEach(function(f){scanMap[f.scanner]=(scanMap[f.scanner]||0)+1;});scannerCounts=scanMap;
+      }
+      var scanKeys=Object.keys(scannerCounts).sort(function(a,b){return scannerCounts[b]-scannerCounts[a];});
+      if(App.hasChart&&App.$('c-dedup-scanner')){
+        new Chart(App.$('c-dedup-scanner'),{type:'bar',data:{labels:scanKeys,datasets:[{data:scanKeys.map(function(k){return scannerCounts[k];}),backgroundColor:'rgba(59,130,246,.7)',borderWidth:0,borderRadius:4}]},options:{...App.cardCfg,indexAxis:'y',scales:{x:{grid:{color:App.gridColor},ticks:{font:{size:10}}},y:{grid:{display:false},ticks:{font:{size:10}}}},plugins:{legend:{display:false}}}});
+      }
+      var overlaps=DA.cross_scanner_redundancy||[];
+      if(App.hasChart&&App.$('c-dedup-overlap')&&overlaps.length>0){
+        var top=overlaps.slice(0,10);
+        new Chart(App.$('c-dedup-overlap'),{type:'bar',data:{labels:top.map(function(o){return(o.cve||o.vulnerability||'').substring(0,25);}),datasets:[{data:top.map(function(o){return(o.scanners_found_it||[]).length;}),backgroundColor:'rgba(245,158,11,.7)',borderWidth:0,borderRadius:4}]},options:{...App.cardCfg,indexAxis:'y',scales:{x:{grid:{color:App.gridColor},ticks:{font:{size:10}}},y:{grid:{display:false},ticks:{font:{size:10}}}},plugins:{legend:{display:false}}}});
+      }else if(App.$('c-dedup-overlap')){
+        App.$('c-dedup-overlap').parentElement.innerHTML='<div class="card-header">Top Overlaps</div><div class="empty-state" style="height:200px"><p class="empty-state-desc">No cross-scanner overlaps</p></div>';
+      }
+      // Overlap table
+      var ot=App.$('dedup-overlap-table');
+      if(ot&&overlaps.length>0){
+        ot.innerHTML='<table class="data-table"><thead><tr><th>CVE</th><th>Scanners</th><th>Vulnerability</th><th>Product</th></tr></thead><tbody>'+overlaps.map(function(o){
+          return '<tr><td>'+(o.cve?'<a class="cve-link" href="https://nvd.nist.gov/vuln/detail/'+App.esc(o.cve)+'" target="_blank">'+App.esc(o.cve)+'</a>':'<span class="dimmed">—</span>')+'</td><td style="font-size:11px">'+(o.scanners_found_it||[]).join(', ')+'</td><td class="truncate" style="max-width:200px">'+App.esc(o.vulnerability||'—')+'</td><td class="dimmed" style="font-size:11px">'+App.esc(o.product||'—')+'</td></tr>';
+        }).join('')+'</tbody></table>';
+      }
+    }
+  },
+
+  /* ═══ INTEGRATIONS ═══ */
+  integrations:{
+    async saveKeys(){
+      var el=App.$('apikey-status');if(!el)return;
+      el.innerHTML='<span class="dimmed">Saving...</span>';
+      var keys={};
+      ['ak-groq:groq_api_key','ak-nvd:nvd_api_key','ak-github:github_token','ak-jira-url:jira_url','ak-jira-user:jira_user','ak-jira-token:jira_token','ak-jira-project:jira_project','ak-dd-url:defectdojo_url','ak-dd-key:defectdojo_api_key'].forEach(function(pair){
+        var parts=pair.split(':');var val=App.$(parts[0]);if(val&&val.value.trim())keys[parts[1]]=val.value.trim();
+      });
+      try{await App.apiFetch('/api/config/keys',{method:'POST',body:JSON.stringify(keys)});el.innerHTML='<span style="color:var(--risk-low)">Saved! Restart server to apply.</span>';}
+      catch(e){el.innerHTML='<span style="color:var(--risk-critical)">'+App.esc(e.message)+'</span>';}
+    },
+    async testJira(){
+      var el=App.$('jira-status');if(!el)return;el.innerHTML='<span class="dimmed">Testing...</span>';
+      try{var data=await App.apiFetch('/api/jira/test');el.innerHTML=data.connected?'<span style="color:var(--risk-low)">Connected</span>':'<span style="color:var(--risk-critical)">'+App.esc(data.error||'Not configured')+'</span>';}
+      catch(e){el.innerHTML='<span style="color:var(--risk-critical)">'+App.esc(e.message)+'</span>';}
+    },
+    async createJira(){
+      var el=App.$('jira-status');if(!el)return;el.innerHTML='<span class="dimmed">Creating...</span>';
+      try{var data=await App.apiFetch('/api/jira/create?threshold=60',{method:'POST'});el.innerHTML='<span style="color:var(--risk-low)">Created '+(data.created||0)+' issues</span>';}
+      catch(e){el.innerHTML='<span style="color:var(--risk-critical)">'+App.esc(e.message)+'</span>';}
+    },
+    async testDD(){
+      var el=App.$('dd-status');if(!el)return;el.innerHTML='<span class="dimmed">Testing...</span>';
+      try{var data=await App.apiFetch('/api/defectdojo/test');el.innerHTML=data.connected?'<span style="color:var(--risk-low)">Connected</span>':'<span style="color:var(--risk-critical)">'+App.esc(data.error||'Not configured')+'</span>';}
+      catch(e){el.innerHTML='<span style="color:var(--risk-critical)">'+App.esc(e.message)+'</span>';}
+    },
+    async importDD(){
+      var el=App.$('dd-status');if(!el)return;el.innerHTML='<span class="dimmed">Importing...</span>';
+      try{var data=await App.apiFetch('/api/defectdojo/import?product_name=all',{method:'POST'});el.innerHTML='<span style="color:var(--risk-low)">'+App.esc(data.message||'Imported')+'</span>';}
+      catch(e){el.innerHTML='<span style="color:var(--risk-critical)">'+App.esc(e.message)+'</span>';}
+    }
+  }
+};
+
+/* Init */
+if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',function(){App.init();});}else{App.init();}
 </script>
 </body>
 </html>"""
