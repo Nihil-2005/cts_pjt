@@ -10,7 +10,7 @@ OUTPUT="${2:?Usage: $0 <image_name> <output_file>}"
 echo "[*] Running Trivy against $IMAGE"
 docker run --rm \
   -v "$(dirname "$OUTPUT")":/out \
-  aquasec/trivy:latest \
+  aquasec/trivy:0.55.0 \
   image --format json -o "/out/$(basename "$OUTPUT")" \
   "$IMAGE" || true
 

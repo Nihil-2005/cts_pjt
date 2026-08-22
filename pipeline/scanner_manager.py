@@ -62,10 +62,10 @@ class ScanJob:
 # ─── Scanner Docker images ──────────────────────────────────────────────────
 
 SCANNER_IMAGES = {
-    "nuclei": "projectdiscovery/nuclei:latest",
-    "zap": "ghcr.io/zaproxy/zaproxy:stable",
-    "trivy": "aquasec/trivy:latest",
-    "wapiti": "vulnlab/wapiti:latest",
+    "nuclei": "projectdiscovery/nuclei:v3.3.0",
+    "zap": "ghcr.io/zaproxy/zaproxy:2.15.0",
+    "trivy": "aquasec/trivy:0.55.0",
+    "wapiti": "vulnlab/wapiti:latest",  # No versioned tags available
 }
 
 # Scanner run commands (mounted inside container)

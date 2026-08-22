@@ -10,7 +10,7 @@ OUTPUT="${2:?Usage: $0 <target_url> <output_file>}"
 echo "[*] Running Nuclei against $TARGET"
 docker run --rm --network=host \
   -v "$(dirname "$OUTPUT")":/out \
-  projectdiscovery/nuclei:latest \
+  projectdiscovery/nuclei:v3.3.0 \
   -u "$TARGET" \
   -j -o "/out/$(basename "$OUTPUT")"
 
