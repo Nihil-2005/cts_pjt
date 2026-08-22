@@ -1140,10 +1140,12 @@ def build_dashboard(
         "lifecycle": lifecycle_data,
         "dedup_analytics": dedup_analytics,
     }
-    json_str = json.dumps(dash_data)
-    # Prevent XSS: escape </script> inside JSON so it cannot break out of the <script> block
+    json_str = json.dumps(dash_data, ensure_ascii=True)
+    # Prevent XSS: escape sequences that could break out of the <script> block
     json_str = json_str.replace("</script>", r"<\/script>")
     json_str = json_str.replace("</SCRIPT>", r"<\/SCRIPT>")
+    json_str = json_str.replace("<!--", r"<\!--")
+    json_str = json_str.replace("-->", r"--\>")
     html = _HTML_TEMPLATE.replace("__DASH_JSON__", json_str)
     with open(path, "w", encoding="utf-8") as fh:
         fh.write(html)

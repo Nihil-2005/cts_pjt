@@ -22,6 +22,10 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+
 from fastapi import (
     FastAPI,
     WebSocket,
@@ -48,13 +52,25 @@ app = FastAPI(
     version="2.0.0",
 )
 
+# CORS: restrict to known origins (set via env var)
+_ALLOWED_ORIGINS = os.environ.get(
+    "ALLOWED_ORIGINS",
+    "http://localhost:8000,http://localhost:3000,http://127.0.0.1:8000"
+).split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[o.strip() for o in _ALLOWED_ORIGINS if o.strip()],
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["*"],
+    max_age=600,
 )
+
+# Rate limiting
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # ─── Config path ─────────────────────────────────────────────────────────────
 
@@ -73,11 +89,18 @@ def _save_config(cfg: Config):
 
 # ─── Auth dependency ─────────────────────────────────────────────────────────
 
-async def get_current_user(authorization: Optional[str] = Header(None)) -> str:
-    """Extract and verify JWT from Authorization header."""
-    if not authorization:
-        raise HTTPException(status_code=401, detail="Missing authorization header")
-    token = authorization.replace("Bearer ", "")
+async def get_current_user(request: Request, authorization: Optional[str] = Header(None)) -> str:
+    """Extract and verify JWT from cookie or Authorization header."""
+    # Try cookie first
+    token = request.cookies.get("access_token")
+    # Fallback to Authorization header (for API clients)
+    if not token and authorization:
+        if authorization.startswith("Bearer "):
+            token = authorization[7:]
+        else:
+            token = authorization
+    if not token:
+        raise HTTPException(status_code=401, detail="Missing authentication")
     payload = verify_token(token)
     if not payload:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
@@ -113,6 +136,9 @@ ws_manager = ConnectionManager()
 
 
 # ─── Pydantic models ────────────────────────────────────────────────────────
+
+from fastapi import Request
+
 
 class LoginRequest(BaseModel):
     username: str
@@ -150,17 +176,27 @@ class PipelineRequest(BaseModel):
 # ─── Auth routes ─────────────────────────────────────────────────────────────
 
 @app.post("/api/login", response_model=LoginResponse)
-async def login(req: LoginRequest):
-    """Authenticate and get JWT token."""
+@limiter.limit("5/minute")
+async def login(request: Request, req: LoginRequest):
+    """Authenticate and get JWT token (rate-limited)."""
     if not authenticate(req.username, req.password):
         raise HTTPException(status_code=401, detail="Invalid credentials")
     from .auth import _DEFAULT_TTL
     token = create_token(req.username, ttl_seconds=_DEFAULT_TTL)
-    return LoginResponse(
-        token=token,
-        expires_in=_DEFAULT_TTL,
-        username=req.username,
+    response = JSONResponse(content={
+        "token": token,
+        "expires_in": _DEFAULT_TTL,
+        "username": req.username,
+    })
+    response.set_cookie(
+        key="access_token",
+        value=token,
+        httponly=True,
+        secure=False,  # Set True behind HTTPS
+        samesite="lax",
+        max_age=_DEFAULT_TTL,
     )
+    return response
 
 
 @app.get("/api/auth/me")
@@ -338,22 +374,19 @@ async def product_scan_status(product_id: str, user: str = Depends(get_current_u
 
 # ─── Pipeline routes ─────────────────────────────────────────────────────────
 
-_pipeline_running = False
+_pipeline_lock = threading.Lock()
 
 
 @app.post("/api/pipeline/run")
 async def run_pipeline(req: PipelineRequest, user: str = Depends(get_current_user)):
     """Run the full 8-stage pipeline. Runs in background thread."""
-    global _pipeline_running
-    if _pipeline_running:
+    if not _pipeline_lock.acquire(blocking=False):
         raise HTTPException(status_code=409, detail="Pipeline is already running")
 
     cfg = _load_config()
     manager = get_manager()
 
     def _run():
-        global _pipeline_running
-        _pipeline_running = True
         try:
             from . import run as pipeline_run
             pipeline_run.run_pipeline(
@@ -367,7 +400,7 @@ async def run_pipeline(req: PipelineRequest, user: str = Depends(get_current_use
         except Exception as e:
             print(f"[PIPELINE ERROR] {e}")
         finally:
-            _pipeline_running = False
+            _pipeline_lock.release()
 
     thread = threading.Thread(target=_run, daemon=True)
     thread.start()
@@ -378,7 +411,7 @@ async def run_pipeline(req: PipelineRequest, user: str = Depends(get_current_use
 @app.get("/api/pipeline/status")
 async def pipeline_status(user: str = Depends(get_current_user)):
     """Check if pipeline is running."""
-    return {"running": _pipeline_running}
+    return {"running": _pipeline_lock.locked()}
 
 
 # ─── GitHub ticket routes ────────────────────────────────────────────────────
@@ -679,13 +712,19 @@ async def lifecycle_breached(user: str = Depends(get_current_user)):
 @app.websocket("/ws/live")
 async def websocket_live(ws: WebSocket):
     """WebSocket endpoint for real-time scanner progress updates."""
-    # Verify token from query param
+    # Verify token BEFORE accept (C21 fix)
     token = ws.query_params.get("token", "")
+    if not token:
+        # Try cookie
+        token = ws.cookies.get("access_token", "")
     if token:
         payload = verify_token(token)
         if not payload:
             await ws.close(code=4001, reason="Invalid token")
             return
+    else:
+        await ws.close(code=4001, reason="Missing token")
+        return
 
     await ws_manager.connect(ws)
     manager = get_manager()
@@ -747,7 +786,10 @@ async def serve_home():
 @app.get("/dashboard", response_class=HTMLResponse)
 async def serve_dashboard():
     """Serve the main dashboard HTML."""
-    dashboard_path = Path("outputs/risk_dashboard.html")
+    ALLOWED_DIR = Path("outputs").resolve()
+    dashboard_path = (ALLOWED_DIR / "risk_dashboard.html").resolve()
+    if not dashboard_path.is_relative_to(ALLOWED_DIR):
+        raise HTTPException(status_code=403, detail="Access denied")
     if dashboard_path.exists():
         return FileResponse(str(dashboard_path))
     return HTMLResponse(_LOGIN_HTML)
@@ -837,7 +879,7 @@ transition:opacity .2s;margin-top:8px}
     <button class="btn" type="submit" id="login-btn">Sign In</button>
     <div class="error" id="error-msg"></div>
   </form>
-  <div class="hint">Default: admin / admin</div>
+  <div class="hint">Check server console for credentials</div>
 </div>
 <script>
 document.getElementById('login-form').addEventListener('submit', async(e)=>{
@@ -856,8 +898,6 @@ document.getElementById('login-form').addEventListener('submit', async(e)=>{
     });
     const data=await resp.json();
     if(!resp.ok)throw new Error(data.detail||'Login failed');
-    localStorage.setItem('token',data.token);
-    localStorage.setItem('token_exp',Date.now()+data.expires_in*1000);
     localStorage.setItem('username',data.username);
     window.location.href='/dashboard';
   }catch(e){err.textContent=e.message;err.style.display='block';}
@@ -908,7 +948,7 @@ def main():
     print(f"    Network:  http://{local_ip}:{port}")
     print(f"    API Docs: http://localhost:{port}/docs")
     print("")
-    print(f"  Login: admin / admin")
+    print(f"  Login: admin / DASHBOARD_PASS (see env var)")
     print("  " + "=" * 56)
     print("")
     uvicorn.run(

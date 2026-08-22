@@ -89,8 +89,14 @@ def check_password(password: str, stored: str) -> bool:
 
 
 # ─── Default admin credentials (override via env) ───────────────────────────
+_DASHBOARD_PASS = os.environ.get("DASHBOARD_PASS")
+if not _DASHBOARD_PASS:
+    raise RuntimeError(
+        "DASHBOARD_PASS environment variable must be set. "
+        "Generate one with: python -c \"import secrets; print(secrets.token_urlsafe(16))\""
+    )
 _DEFAULT_USER = os.environ.get("DASHBOARD_USER", "admin")
-_DEFAULT_PASS_HASH = hash_password(os.environ.get("DASHBOARD_PASS", "admin"))
+_DEFAULT_PASS_HASH = hash_password(_DASHBOARD_PASS)
 
 
 def authenticate(username: str, password: str) -> bool:

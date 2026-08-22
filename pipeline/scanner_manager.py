@@ -8,12 +8,14 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shlex
 import subprocess
 import threading
 import time
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
+from urllib.parse import urlparse
 
 
 class ScannerStatus(str, Enum):
@@ -156,6 +158,16 @@ class ScannerManager:
                 results[product_id] = self.check_app_status(url)
         return results
 
+    def _validate_target_url(self, url: str) -> str:
+        """Validate and normalize target URL. Raises ValueError on invalid."""
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https"):
+            raise ValueError(f"Invalid URL scheme: {parsed.scheme!r} (must be http or https)")
+        if not parsed.netloc:
+            raise ValueError("Missing host in URL")
+        # Reconstruct to strip any injection payloads
+        return f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+
     def _build_docker_run_cmd(self, job: ScanJob, target_url: str) -> List[str]:
         """Build the docker run command for a scanner."""
         image = SCANNER_IMAGES.get(job.scanner, "")
@@ -224,6 +236,17 @@ class ScannerManager:
             job.status = ScannerStatus.RUNNING
             job.started_at = time.time()
             self._notify(job)
+
+            # Validate URL (C6 fix: command injection prevention)
+            try:
+                target_url = self._validate_target_url(target_url)
+            except ValueError as e:
+                job.status = ScannerStatus.FAILED
+                job.error = f"Invalid target URL: {e}"
+                job.finished_at = time.time()
+                job.logs.append(f"[ERROR] Invalid target URL: {e}")
+                self._notify(job)
+                return
 
             cmd = self._build_docker_run_cmd(job, target_url)
             job.logs.append(f"[START] {' '.join(cmd)}")

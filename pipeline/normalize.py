@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 import os
-import xml.etree.ElementTree as ET
+from defusedxml import ElementTree as ET
 from typing import Any, Dict, List, Optional
 
 from .models import Finding, normalize_severity

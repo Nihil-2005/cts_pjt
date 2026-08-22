@@ -171,7 +171,9 @@ class LifecycleManager:
     def __init__(self, db_path: str = "outputs/lifecycle.db"):
         self.db_path = db_path
         os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
-        self.conn = sqlite3.connect(db_path)
+        self.conn = sqlite3.connect(db_path, check_same_thread=False)
+        self.conn.execute("PRAGMA journal_mode=WAL")
+        self.conn.execute("PRAGMA synchronous=NORMAL")
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(_SCHEMA)
         self.conn.commit()

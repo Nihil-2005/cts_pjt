@@ -29,14 +29,14 @@ services:
     restart: unless-stopped
 
   juiceshop:
-    image: bkimminich/juice-shop:latest
+    image: bkimminich/juice-shop:v15.3.0  # Pin to specific version (not :latest)
     container_name: juiceshop
     ports:
       - "3000:3000"
     restart: unless-stopped
 
   bwapp:
-    image: raesene/bwapp:latest
+    image: raesene/bwapp:latest  # Note: no versioned tags available for bWAPP
     container_name: bwapp
     ports:
       - "8080:80"
