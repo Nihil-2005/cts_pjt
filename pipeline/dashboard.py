@@ -1056,14 +1056,15 @@ const App={
       App.apiFetch('/api/scans/jobs').then(function(data){
         if(data.jobs&&data.jobs.length){
           var el=App.$('scanner-progress');if(!el)return;
+          var empty=el.querySelector('.empty-state');if(empty)empty.remove();
           el.innerHTML=data.jobs.map(function(job){
             var statusColors={pending:'#6B7280',running:'#3B82F6',completed:'#22C55E',failed:'#EF4444'};
             var sc=statusColors[job.status]||'#6B7280';
             var elapsed=job.started_at?(job.finished_at||Date.now()/1000)-job.started_at:0;
             return '<div data-job="'+job.job_id+'" style="display:flex;align-items:center;gap:var(--space-3);padding:var(--space-2) 0;border-bottom:1px solid var(--border-subtle)"><span class="status-dot" style="background:'+sc+'"></span><div style="flex:1"><div style="font-size:var(--text-xs);font-weight:500;color:var(--text-primary)">'+App.esc(job.product)+' / '+App.esc(job.scanner)+'</div></div><span style="font-size:10px;color:'+sc+'">'+job.status+'</span></div>';
           }).join('');
-        }
-      }).catch(function(){});
+        }else{App.control._setScannerEmpty();}
+      }).catch(function(){App.control._setScannerEmpty();});
     },
     scanAll(){
       App.toast('Starting scan for all products...','info');
@@ -1162,6 +1163,9 @@ const App={
       var overlaps=DA.cross_scanner_redundancy||[];
       if(App.hasChart&&App.$('c-dedup-overlap')){
         if(overlaps.length>0){
+          // Show canvas, remove any empty overlay
+          var cv=App.$('c-dedup-overlap');
+          if(cv){cv.style.display='block';var par=cv.parentElement;var ov=par?par.querySelector('.empty-state-overlay'):null;if(ov)ov.remove();}
           var top=overlaps.slice(0,10);
           new Chart(App.$('c-dedup-overlap'),{type:'bar',data:{labels:top.map(function(o){return(o.cve||o.vulnerability||'').substring(0,25);}),datasets:[{data:top.map(function(o){return(o.scanners_found_it||[]).length;}),backgroundColor:CHART_COLORS.overlapBar,borderWidth:0,borderRadius:4}]},options:{indexAxis:'y',scales:{x:{grid:{color:App.gridColor},ticks:{font:{size:10},color:'#9CA3AF'}},y:{grid:{display:false},ticks:{font:{size:10},color:'#9CA3AF'}}},plugins:{legend:{display:false}}}});
         }else{
