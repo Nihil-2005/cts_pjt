@@ -139,13 +139,13 @@ body{font-family:var(--font-sans);background:var(--bg-base);color:var(--text-pri
 .tab-nav::-webkit-scrollbar{display:none}
 .tab-btn{padding:var(--space-2) var(--space-3);border:none;cursor:pointer;font-size:var(--text-xs);font-weight:500;color:var(--text-tertiary);background:transparent;transition:color 150ms;white-space:nowrap;font-family:var(--font-sans);position:relative}
 .tab-btn::after{content:'';position:absolute;bottom:0;left:0;right:0;height:2px;background:transparent}
-.tab-btn.active::after{background:var(--risk-info)}
 .tab-btn:hover{color:var(--text-secondary)}
 .tab-btn.active{color:var(--text-primary)}
 .tab-btn.active::after{background:var(--risk-info)}
 
 /* --- Cards --- */
-.card{background:var(--bg-elevated);border:1px solid var(--border-subtle);border-radius:8px;padding:var(--space-5)}
+.card{background:var(--bg-elevated);border:1px solid var(--border-subtle);border-radius:8px;padding:var(--space-5);transition:border-color 150ms}
+.card:hover{border-color:var(--border-default)}
 .card-header{display:flex;align-items:center;gap:var(--space-2);margin-bottom:var(--space-4);font-size:var(--text-xs);font-weight:500;color:var(--text-secondary)}
 
 /* --- KPI --- */
@@ -156,10 +156,8 @@ body{font-family:var(--font-sans);background:var(--bg-base);color:var(--text-pri
 
 /* --- Buttons --- */
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:var(--space-2);padding:var(--space-2) var(--space-4);border-radius:6px;font-size:var(--text-xs);font-weight:600;font-family:var(--font-sans);cursor:pointer;border:1px solid transparent;transition:all 150ms;text-decoration:none;line-height:1.4}
---risk-info-hover:#2563eb;
-}
 .btn-primary{background:var(--risk-info);color:#fff;border-color:var(--risk-info)}
-.btn-primary:hover{background:var(--risk-info-hover);border-color:var(--risk-info-hover)}
+.btn-primary:hover{background:#2563eb;border-color:#2563eb}
 .btn-secondary{background:var(--bg-surface);color:var(--text-secondary);border-color:var(--border-default)}
 .btn-secondary:hover{background:var(--bg-hover);color:var(--text-primary);border-color:var(--border-active)}
 .btn-sm{padding:var(--space-2) var(--space-3);font-size:var(--text-xs)}
@@ -218,6 +216,7 @@ select.input option{background:var(--bg-elevated);color:var(--text-primary)}
 .mono{font-family:var(--font-mono);font-variant-numeric:tabular-nums}
 .truncate{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block}
 .dimmed{color:var(--text-muted)}
+.no-wrap{white-space:nowrap}
 .text-critical{color:var(--risk-critical)}.text-low{color:var(--risk-low)}
 .mb-4{margin-bottom:var(--space-4)}.mb-6{margin-bottom:var(--space-6)}
 
@@ -281,7 +280,7 @@ select.input option{background:var(--bg-elevated);color:var(--text-primary)}
   .tab-nav{width:100%;overflow-x:auto}
   .grid-3,.grid-2,.control-grid{grid-template-columns:1fr}
   .detail-panel{grid-template-columns:1fr}
-  .kpi-grid{grid-template-columns:repeat(2,1fr)}
+  .kpi-grid{grid-template-columns:repeat(auto-fill,minmax(140px,1fr))}
   .page{padding:var(--space-4)}
   .integration-fields{grid-template-columns:1fr}
 }
@@ -473,13 +472,14 @@ select.input option{background:var(--bg-elevated);color:var(--text-primary)}
 <script>const DASH=__DASH_JSON__;</script>
 <script>
 /* ═══════════════════════ APP ═══════════════════════ */
+const OP={high:'.8',med:'.7',low:'.5',dim:'.4'};
 const CHART_COLORS={
-  critical:'rgba(239,68,68,.8)',high:'rgba(245,158,11,.8)',medium:'rgba(234,179,8,.8)',
-  low:'rgba(34,197,94,.8)',info:'rgba(107,114,128,.4)',
-  infoBar:'rgba(59,130,246,.7)',infoBarDim:'rgba(59,130,246,.5)',
-  scannerBar:'rgba(59,130,246,.7)',overlapBar:'rgba(245,158,11,.7)',
+  critical:'rgba(239,68,68,'+OP.high+')',high:'rgba(245,158,11,'+OP.high+')',medium:'rgba(234,179,8,'+OP.high+')',
+  low:'rgba(34,197,94,'+OP.high+')',info:'rgba(107,114,128,'+OP.dim+')',
+  infoBar:'rgba(59,130,246,'+OP.med+')',infoBarDim:'rgba(59,130,246,'+OP.low+')',
+  scannerBar:'rgba(59,130,246,'+OP.med+')',overlapBar:'rgba(245,158,11,'+OP.med+')',
   line:['#3B82F6','#22C55E','#EAB308','#EF4444','#F59E0B'],
-  arrow:{low:'rgba(34,197,94,.7)',med:'rgba(234,179,8,.8)',high:'rgba(239,68,68,.8)'}
+  arrow:{low:'rgba(34,197,94,'+OP.med+')',med:'rgba(234,179,8,'+OP.high+')',high:'rgba(239,68,68,'+OP.high+')'}
 };
 const TABLE_COLUMNS=[
   {k:'rank',label:'#',w:'40px',sortable:true,dir:-1},
@@ -516,6 +516,7 @@ const App={
 
   $(id){return document.getElementById(id)},
   esc(s){return(s||'').toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');},
+  tooltipText(s){return(s||'').toString().replace(/&/g,'&amp;').replace(/"/g,'&quot;');},
   scoreColor(v){return v>=80?'#EF4444':v>=60?'#F59E0B':v>=40?'#EAB308':'#22C55E';},
   scoreClass(v){return v>=80?'text-critical':v>=60?'':v>=40?'':'text-low';},
   priClass(p){return({P1:'b-p1',P2:'b-p2',P3:'b-p3',P4:'b-p4'}[p]||'b-p4');},
@@ -551,7 +552,7 @@ const App={
     if(S.products)parts.push(S.products.length+' products');
     if(S.p1>0)parts.push('<span class="p1-count">'+S.p1+' P1</span>');
     if(S.p2>0)parts.push('<span class="p2-count">'+S.p2+' P2</span>');
-    meta.innerHTML=parts.join(' \u00b7 ')
+    meta.innerHTML=parts.join(' \u00b7 ');
     var tf=this.$('tc-findings');if(tf)tf.textContent='('+S.final_findings+')';
     var tq=this.$('tc-quarantine');if(tq)tq.textContent='('+S.quarantined+')';
   },
@@ -594,7 +595,7 @@ const App={
   },    initCharts(){
     var self=this;
     if(typeof Chart!=='undefined'){self.overview.initCharts();return;}
-    // Poll for Chart.js to load (max 10s)
+    // Poll for Chart.js to load (max 10s, 200ms intervals)
     var n=0;var iv=setInterval(function(){
       n++;if(typeof Chart!=='undefined'){clearInterval(iv);self.overview.initCharts();}
       if(n>50)clearInterval(iv);
@@ -652,24 +653,24 @@ const App={
       App.hasChart=true;
       try{
         var S=App.data.summary,F=App.data.findings,H=App.data.history;
-        var barOpts={indexAxis:'y',scales:{x:{grid:{color:App.gridColor},ticks:{font:{size:10},color:'#9CA3AF'}},y:{grid:{display:false},ticks:{font:{size:10},color:'#9CA3AF'}}},plugins:{legend:{display:false}}};
+        var hBarOpts={indexAxis:'y',scales:{x:{grid:{color:App.gridColor},ticks:{font:{size:10},color:'#9CA3AF'}},y:{grid:{display:false},ticks:{font:{size:10},color:'#9CA3AF'}}},plugins:{legend:{display:false}}};
         // Priority horizontal bar
         var pe=App.$('c-priority');
-        if(pe)new Chart(pe,{type:'bar',data:{labels:['P1 Critical','P2 High','P3 Medium','P4 Low'],datasets:[{data:[S.p1,S.p2,S.p3,S.p4],backgroundColor:[CHART_COLORS.critical,CHART_COLORS.high,CHART_COLORS.medium,CHART_COLORS.info],borderWidth:0,borderRadius:4}]},options:barOpts});
+        if(pe)new Chart(pe,{type:'bar',data:{labels:['P1 Critical','P2 High','P3 Medium','P4 Low'],datasets:[{data:[S.p1,S.p2,S.p3,S.p4],backgroundColor:[CHART_COLORS.critical,CHART_COLORS.high,CHART_COLORS.medium,CHART_COLORS.info],borderWidth:0,borderRadius:4}]},options:hBarOpts});
         // Severity horizontal bar
         var se=App.$('c-severity');
         if(se){
           var sc={critical:0,high:0,medium:0,low:0,info:0};
           F.forEach(function(f){sc[f.severity]=(sc[f.severity]||0)+1;});
           var sl=['critical','high','medium','low','info'];
-          new Chart(se,{type:'bar',data:{labels:sl.map(function(s){return s.charAt(0).toUpperCase()+s.slice(1);}),datasets:[{data:sl.map(function(s){return sc[s]||0;}),backgroundColor:[CHART_COLORS.critical,CHART_COLORS.high,CHART_COLORS.medium,CHART_COLORS.low,CHART_COLORS.info],borderWidth:0,borderRadius:4}]},options:barOpts});
+          new Chart(se,{type:'bar',data:{labels:sl.map(function(s){return s.charAt(0).toUpperCase()+s.slice(1);}),datasets:[{data:sl.map(function(s){return sc[s]||0;}),backgroundColor:[CHART_COLORS.critical,CHART_COLORS.high,CHART_COLORS.medium,CHART_COLORS.low,CHART_COLORS.info],borderWidth:0,borderRadius:4}]},options:hBarOpts});
         }
         // Scanner coverage
         var sce=App.$('c-scanner');
         if(sce){
           var sm={};F.forEach(function(f){sm[f.scanner]=(sm[f.scanner]||0)+1;});
           var sk=Object.keys(sm).sort(function(a,b){return sm[b]-sm[a];});
-          new Chart(sce,{type:'bar',data:{labels:sk,datasets:[{data:sk.map(function(k){return sm[k];}),backgroundColor:CHART_COLORS.scannerBar,borderWidth:0,borderRadius:4}]},options:barOpts});
+          new Chart(sce,{type:'bar',data:{labels:sk,datasets:[{data:sk.map(function(k){return sm[k];}),backgroundColor:CHART_COLORS.scannerBar,borderWidth:0,borderRadius:4}]},options:hBarOpts});
         }
         // Noise reduction vertical bar
         var ne=App.$('c-noise');
@@ -724,7 +725,7 @@ const App={
         var col=TABLE_COLUMNS.find(function(c){return c.k===th.dataset.col;});
         if(!col)return;
         if(self._sortCol===th.dataset.col){self._sortDir*=-1;}
-        else{self._sortCol=th.dataset.col;self._sortDir=col.dir||-1;}
+        else{self._sortCol=th.dataset.col;        self._sortDir=col.dir!=null?col.dir:-1;}
         document.querySelectorAll('#tbl-head th').forEach(function(t){t.classList.remove('sorted');var a=t.querySelector('.sort-arrow');if(a)a.textContent='\u2195';});
         th.classList.add('sorted');var arrow=th.querySelector('.sort-arrow');if(arrow)arrow.textContent=self._sortDir===-1?'\u2193':'\u2191';
         self._invalidateCache();self.render();
@@ -739,8 +740,8 @@ const App={
     _invalidateCache(){this._filteredCache=null;this._cacheKey='';},
     getFiltered(){
       var F=App.data.findings,q=this._search.toLowerCase(),self=this;
-      var key=this._search+'|'+this._fPri+'|'+this._fSev+'|'+this._fScan+'|'+this._fKev;
-      if(this._filteredCache&&this._cacheKey===key)return this._filteredCache;
+      var key=this._search+'\x00'+this._fPri+'\x00'+this._fSev+'\x00'+this._fScan+'\x00'+this._fKev;
+      if(this._filteredCache!==null&&this._cacheKey===key)return this._filteredCache;
       var result=F.filter(function(f){
         if(self._fPri&&f.priority!==self._fPri)return false;
         if(self._fSev&&f.severity!==self._fSev)return false;
@@ -775,7 +776,7 @@ const App={
         '<td><span class="score-num" style="color:'+sc+'">'+f.score+'</span></td>'+
         '<td><span class="badge '+App.priClass(f.priority)+'">'+App.esc(f.priority)+'</span></td>'+
         '<td><span class="badge '+App.sevClass(f.severity)+'">'+App.esc(f.severity)+'</span></td>'+
-        '<td><span class="truncate" style="max-width:300px;color:var(--text-primary);font-weight:500" title="'+App.esc(title)+'">'+App.esc(truncated)+'</span></td>'+
+        '<td><span class="truncate" style="max-width:300px;color:var(--text-primary);font-weight:500" title="'+App.tooltipText(title)+'">'+App.esc(truncated)+'</span></td>'+
         '<td class="truncate" style="max-width:100px">'+App.esc(f.product)+'</td>'+
         '<td class="dimmed" style="font-size:11px">'+App.esc(f.scanner)+'</td>'+
         '<td>'+(f.cve?'<a class="cve-link" href="https://nvd.nist.gov/vuln/detail/'+App.esc(f.cve)+'" target="_blank" onclick="event.stopPropagation()">'+App.esc(f.cve)+'</a>':'<span class="dimmed">\u2014</span>')+'</td>'+
@@ -806,9 +807,11 @@ const App={
     toggleDetail(tr){
       var rank=tr.dataset.rank;var detail=App.$('detail-'+rank);if(!detail)return;
       var wasOpen=detail.classList.contains('open');
-      // Close previously open detail
+      // Close any previously open detail (including same row if re-clicked)
       if(App.state.openDetail){App.state.openDetail.classList.remove('open');var prevRow=App.state.openDetail.previousElementSibling;if(prevRow)prevRow.classList.remove('expanded');}
+      // Only open if this row wasn't already open (toggle behavior)
       if(!wasOpen){detail.classList.add('open');tr.classList.add('expanded');App.state.openDetail=detail;}
+      else{App.state.openDetail=null;}
     },
     exportCSV(){
       var rows=this.getFiltered();
@@ -860,6 +863,7 @@ const App={
       if(!svgEl)return;
       // Clear SVG via innerHTML for performance (d3.selectAll('*').remove() is slower)
       svgEl.innerHTML='';
+      // Note: if container is hidden (display:none), clientWidth=0; fallback to 900
       if(!paths.length){svgEl.innerHTML='<text x="50%" y="50%" text-anchor="middle" fill="#4B5563" dy=".3em">No paths for this product</text>';return;}
       // HIGH_IMPACT is hardcoded here — document as known limitation (should come from config)
       var HIGH_IMPACT=['CWE-89','CWE-79','CWE-78','CWE-22','CWE-434','CWE-918','CWE-502','CWE-611','CWE-287','CWE-306'];
@@ -876,11 +880,13 @@ const App={
       this.zoom=d3.zoom().scaleExtent([.3,3]).on('zoom',function(e){g.attr('transform',e.transform);});
       svg.call(this.zoom);this.svgRoot=svg;
       var defs=svg.append('defs');
+      // refX should match max node radius (28) + stroke (1.5) + gap
+      var arrowRefX=32;
       ['low','med','high'].forEach(function(t,i){
-        defs.append('marker').attr('id','arr-'+t).attr('viewBox','0 -4 8 8').attr('refX',26).attr('refY',0).attr('markerWidth',6).attr('markerHeight',6).attr('orient','auto').append('path').attr('d','M0,-4L8,0L0,4').attr('fill',[CHART_COLORS.arrow.low,CHART_COLORS.arrow.med,CHART_COLORS.arrow.high][i]);
+        defs.append('marker').attr('id','arr-'+t).attr('viewBox','0 -4 8 8').attr('refX',arrowRefX).attr('refY',0).attr('markerWidth',6).attr('markerHeight',6).attr('orient','auto').append('path').attr('d','M0,-4L8,0L0,4').attr('fill',[CHART_COLORS.arrow.low,CHART_COLORS.arrow.med,CHART_COLORS.arrow.high][i]);
       });
       var probClass=function(p){return p>.6?'high':p>.3?'med':'low';};
-      var probColor=function(p){return p>.6?CHART_COLORS.arrow.high:p>.3?CHART_COLORS.arrow.med:'rgba(34,197,94,.5)';};
+      var probColor=function(p){return p>.6?CHART_COLORS.arrow.high:p>.3?CHART_COLORS.arrow.med:CHART_COLORS.arrow.low;};
       var link=g.append('g').selectAll('line').data(links).join('line').attr('stroke',function(d){return probColor(d.prob);}).attr('stroke-width',function(d){return 1+d.prob*2;}).attr('stroke-opacity',.7).attr('marker-end',function(d){return 'url(#arr-'+probClass(d.prob)+')';});
       var linkLabel=g.append('g').selectAll('text').data(links).join('text').text(function(d){return parseFloat(d.prob).toFixed(2);}).attr('font-size',9).attr('fill','#6B7280').attr('text-anchor','middle');
       var nodeG=g.append('g').selectAll('g').data(nodes).join('g').call(d3.drag().on('start',function(e,d){if(!e.active)sim.alphaTarget(.3).restart();d.fx=d.x;d.fy=d.y;}).on('drag',function(e,d){d.fx=e.x;d.fy=e.y;}).on('end',function(e,d){if(!e.active)sim.alphaTarget(0);d.fx=null;d.fy=null;}));
@@ -1216,6 +1222,8 @@ def build_dashboard(
     json_str = json_str.replace("</SCRIPT>", r"<\/SCRIPT>")
     json_str = json_str.replace("<!--", r"<\!--")
     json_str = json_str.replace("-->", r"--\>")
+    # Replace < with \u003c to prevent breaking out of script tags
+    # This replaces ALL < in JSON values -- safe for security data where < is rare
     json_str = json_str.replace("<", "\\u003c")
     html = _HTML_TEMPLATE.replace("__DASH_JSON__", json_str)
     with open(path, "w", encoding="utf-8") as fh:
