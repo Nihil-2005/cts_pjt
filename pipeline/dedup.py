@@ -41,7 +41,7 @@ def _norm_title(title: Optional[str]) -> str:
 
 def _key(*parts: str) -> str:
     joined = "|".join(p or "" for p in parts)
-    return hashlib.sha1(joined.encode("utf-8")).hexdigest()[:16]
+    return hashlib.sha256(joined.encode("utf-8")).hexdigest()[:16]
 
 
 def _canonical_rank(f: Finding) -> tuple:

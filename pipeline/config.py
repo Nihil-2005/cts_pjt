@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 from typing import Any, Dict, Optional
 
 DEFAULT_CONFIG: Dict[str, Any] = {
@@ -138,5 +139,16 @@ class Config:
         return cls({})
 
     def save(self, path: str) -> None:
-        with open(path, "w", encoding="utf-8") as fh:
-            json.dump(self.data, fh, indent=2)
+        """Atomic write: write to temp file then rename for crash safety."""
+        dir_name = os.path.dirname(path) or "."
+        fd, tmp_path = tempfile.mkstemp(dir=dir_name, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump(self.data, fh, indent=2)
+            os.replace(tmp_path, path)  # Atomic on POSIX; near-atomic on Windows
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise

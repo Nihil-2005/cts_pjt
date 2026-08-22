@@ -16,11 +16,14 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
+import stat
 import sys
 import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
+from urllib.parse import urlparse
 
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
@@ -38,7 +41,7 @@ from fastapi import (
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from .auth import create_token, verify_token, authenticate, _DEFAULT_USER
 from .scanner_manager import get_manager, ScannerStatus
@@ -162,6 +165,23 @@ class ProductCreate(BaseModel):
     control_effectiveness: int = 3
     trivy_image: str = ""
     scanners: Dict[str, str] = {}
+
+    @field_validator('product_id')
+    @classmethod
+    def validate_product_id(cls, v):
+        if not re.match(r'^[a-zA-Z0-9_-]{1,64}$', v):
+            raise ValueError('product_id must be 1-64 alphanumeric chars, hyphens, or underscores')
+        return v
+
+    @field_validator('url')
+    @classmethod
+    def validate_url(cls, v):
+        parsed = urlparse(v)
+        if parsed.scheme not in ('http', 'https'):
+            raise ValueError('URL must use http or https')
+        if not parsed.netloc:
+            raise ValueError('URL must have a valid host')
+        return v
 
 class ScanRequest(BaseModel):
     product: str
@@ -543,6 +563,7 @@ async def update_config_keys(req: ApiKeysUpdate, user: str = Depends(get_current
     with open(env_path, "w") as f:
         for k, v in existing.items():
             f.write(f"{k}={v}\n")
+    os.chmod(env_path, stat.S_IRUSR | stat.S_IWUSR)  # 0o600 — owner read/write only
 
     return {"status": "updated", "keys_updated": list(updates.keys())}
 
@@ -554,11 +575,23 @@ async def get_config(user: str = Depends(get_current_user)):
     return cfg._data
 
 
+class ConfigUpdate(BaseModel):
+    scoring_weights: Optional[dict] = None
+    sla_days: Optional[dict] = None
+    quarantine_rules: Optional[list] = None
+    max_risk_per_scanner: Optional[dict] = None
+
+
 @app.post("/api/config")
-async def update_config(data: dict, user: str = Depends(get_current_user)):
-    """Update config."""
+async def update_config(req: ConfigUpdate, user: str = Depends(get_current_user)):
+    """Update config with validated fields only."""
     cfg = _load_config()
-    cfg._data.update(data)
+    updates = req.model_dump(exclude_none=True)
+    for key, value in updates.items():
+        if key in cfg._data and isinstance(value, dict) and isinstance(cfg._data[key], dict):
+            cfg._data[key].update(value)
+        else:
+            cfg._data[key] = value
     _save_config(cfg)
     return {"status": "updated"}
 
@@ -746,6 +779,10 @@ async def websocket_live(ws: WebSocket):
         while True:
             # Keep connection alive, handle client messages
             data = await ws.receive_text()
+            # Safe JSON parsing with size limit (Issue 5)
+            if len(data.encode('utf-8')) > 4096:
+                await ws.send_json({"type": "error", "data": "Payload too large"})
+                continue
             msg = json.loads(data)
 
             if msg.get("type") == "ping":
@@ -798,31 +835,9 @@ async def serve_dashboard():
 @app.get("/api/health")
 async def api_health():
     """Health check endpoint (no auth required)."""
-    port = int(os.environ.get("PORT", "8000"))
-    local_ip = _get_local_ip()
     return {
         "status": "ok",
         "version": "2.0.0",
-        "host": "0.0.0.0",
-        "port": port,
-        "urls": {
-            "local": f"http://localhost:{port}",
-            "network": f"http://{local_ip}:{port}",
-            "api_docs": f"http://localhost:{port}/docs",
-            "websocket": f"ws://localhost:{port}/ws/live",
-        },
-        "ports": {
-            "inbound": {
-                f"{port}/tcp": "Dashboard + REST API + WebSocket",
-            },
-            "outbound": {
-                "27017/tcp": "MongoDB (NodeGoat database)",
-                "3000/tcp": "Juice Shop (target app)",
-                "4000/tcp": "NodeGoat (target app)",
-                "8080/tcp": "bWAPP (target app)",
-                "443/tcp": "CDN / API calls (EPSS, NVD, Exploit-DB, Groq AI)",
-            },
-        },
     }
 
 

@@ -770,26 +770,20 @@ function addProduct(){
   if(!id||!url){var m=$('ap-msg');if(m){m.textContent='Product ID and URL are required';m.style.color='#ef4444';}return;}
   var scanners={nuclei:url,zap:url,wapiti:url};if(trivy)scanners.trivy=trivy;
   var product={display_name:name,owner:owner||'unassigned',asset_criticality:crit,business_impact:crit,exposure:8,control_effectiveness:3,data_sensitivity:sens,url:url,github_repo:repo,scanners:scanners};
-  // Save to server if logged in
-  if(API_TOKEN){
-    apiFetch('/api/products',{method:'POST',body:JSON.stringify({product_id:id,display_name:name,url:url,github_repo:repo,owner:owner||'unassigned',asset_criticality:crit,data_sensitivity:sens})}).then(function(data){
-      var m2=$('ap-msg');if(m2){m2.textContent=data.status==='created'?'Product saved to server!':'Product updated';m2.style.color='#22c55e';}
-    }).catch(function(e){
-      // Fallback to local-only
-      DASH.products=DASH.products||{};DASH.products[id]=product;
-      var m3=$('ap-msg');if(m3){m3.textContent='Saved locally (server unavailable)';m3.style.color='#eab308';}
-    });
-  }else{
+  // Save to server
+  apiFetch('/api/products',{method:'POST',body:JSON.stringify({product_id:id,display_name:name,url:url,github_repo:repo,owner:owner||'unassigned',asset_criticality:crit,data_sensitivity:sens})}).then(function(data){
+    var m2=$('ap-msg');if(m2){m2.textContent=data.status==='created'?'Product saved to server!':'Product updated';m2.style.color='#22c55e';}
+  }).catch(function(e){
+    // Fallback to local-only
     DASH.products=DASH.products||{};DASH.products[id]=product;
-    var m4=$('ap-msg');if(m4){m4.textContent='Product saved. Login to persist to server.';m4.style.color='#eab308';}
-  }
+    var m3=$('ap-msg');if(m3){m3.textContent='Saved locally (server unavailable)';m3.style.color='#eab308';}
+  });
   var tp2=$('tc-products');if(tp2)tp2.textContent=Object.keys(DASH.products||{}).length;
   ['ap-id','ap-name','ap-url','ap-repo','ap-owner','ap-trivy'].forEach(function(fid){var el=$(fid);if(el)el.value='';});
   buildProducts();
 }
 
 function scanProduct(id){
-  if(!API_TOKEN){window.location.href='/';return;}
   updateControlStatus('Starting scan for '+id+'...','info');
   apiFetch('/api/scans/start',{method:'POST',body:JSON.stringify({product:id})}).then(function(data){
     updateControlStatus('Scan started for '+id+'. '+((data.jobs||[]).length)+' scanner(s) queued.','ok');
@@ -798,7 +792,6 @@ function scanProduct(id){
 
 // ─── Control Center ───
 function loadAppStatus(){
-  if(!API_TOKEN)return;
   apiFetch('/api/products').then(function(data){
     var el=$('app-status-list');if(!el)return;
     var products=data.products||{};var statuses=data.app_statuses||{};var keys=Object.keys(products);
@@ -833,7 +826,6 @@ function handleScanUpdate(job){
 }
 
 function triggerScanAll(){
-  if(!API_TOKEN){window.location.href='/';return;}
   updateControlStatus('Starting scan for all products...','info');
   apiFetch('/api/products').then(function(data){
     var products=data.products||{};var promises=Object.keys(products).map(function(pid){
@@ -847,7 +839,6 @@ function triggerScanAll(){
 }
 
 function loadScannerJobs(){
-  if(!API_TOKEN)return;
   apiFetch('/api/scans/jobs').then(function(data){
     if(data.jobs&&data.jobs.length){
       var el=$('scanner-progress');if(!el)return;
@@ -862,7 +853,6 @@ function loadScannerJobs(){
 }
 
 function runPipeline(){
-  if(!API_TOKEN){window.location.href='/';return;}
   updateControlStatus('Running 8-stage pipeline...','info');
   apiFetch('/api/pipeline/run',{method:'POST',body:JSON.stringify({skip_enrich:true,skip_ai:true})}).then(function(){
     updateControlStatus('Pipeline started in background. Check status periodically.','ok');
@@ -880,7 +870,6 @@ function pollPipelineStatus(){
 }
 
 function createTickets(){
-  if(!API_TOKEN){window.location.href='/';return;}
   updateControlStatus('Creating GitHub Issues for findings above threshold...','info');
   apiFetch('/api/tickets/create?threshold=60',{method:'POST'}).then(function(data){
     var results=data.results||{};var total=0;Object.values(results).forEach(function(r){total+=(r.created||0);});
