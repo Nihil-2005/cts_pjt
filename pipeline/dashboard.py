@@ -219,6 +219,7 @@ select.input option{background:var(--bg-elevated);color:var(--text-primary)}
 .dimmed{color:var(--text-muted)}
 .no-wrap{white-space:nowrap}
 .hidden{display:none}
+.empty-state-overlay{position:absolute;top:0;left:0;right:0;bottom:0;background:var(--bg-elevated);z-index:5;display:flex;align-items:center;justify-content:center;color:var(--text-tertiary);font-size:var(--text-xs)}
 .text-critical{color:var(--risk-critical)}.text-low{color:var(--risk-low)}
 .mb-4{margin-bottom:var(--space-4)}.mb-6{margin-bottom:var(--space-6)}
 
@@ -320,7 +321,7 @@ select.input option{background:var(--bg-elevated);color:var(--text-primary)}
 <main id="page-overview" class="page active" role="tabpanel" aria-labelledby="tab-overview">
   <h2 class="sr-only">Key Metrics</h2>
   <div class="card mb-6" id="exec-brief-card" style="display:none">
-    <div class="card-header" style="cursor:pointer" onclick="this.nextElementSibling.classList.toggle('hidden')">Executive Brief &#9662;</div>
+    <div class="card-header" style="cursor:pointer" tabindex="0" role="button" aria-expanded="false" onclick="var n=this.nextElementSibling;n.classList.toggle('hidden');this.setAttribute('aria-expanded',!n.classList.contains('hidden'))" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();this.click();}">Executive Brief &#9662;</div>
     <div class="hidden" style="padding-top:var(--space-3);font-size:var(--text-xs);line-height:1.7;color:var(--text-secondary)"><p id="exec-brief-text"></p></div>
   </div>
   <div class="kpi-grid" id="kpi-grid"></div>
@@ -507,20 +508,22 @@ const App={
 
   init(){
     this.data=DASH;
-    this.buildHeader();
-    this.initTabs();
-    this.initKeyboard();
-    this.initCharts();
-    this.overview.init();
-    this.findings.init();
-    this.buildQuarantine();
-    this.buildProducts();
-    this.lifecycle.init();
-    this.dedup.init();
-    if(location.hash)this.switchTab(location.hash.slice(1));
+    var self=this;
+    var coreFns=[function(){self.buildHeader();},function(){self.initTabs();},function(){self.initKeyboard();},function(){self.initCharts();}];
+    coreFns.forEach(function(fn,i){try{fn();}catch(e){if(typeof console!=='undefined'&&console.error)console.error('init['+i+']:',e);}});
+    var pageFns=[
+      {n:'overview',fn:function(){self.overview.init();}},
+      {n:'findings',fn:function(){self.findings.init();}},
+      {n:'quarantine',fn:function(){self.buildQuarantine();}},
+      {n:'products',fn:function(){self.buildProducts();}},
+      {n:'lifecycle',fn:function(){self.lifecycle.init();}},
+      {n:'dedup',fn:function(){self.dedup.init();}}
+    ];
+    pageFns.forEach(function(p){try{p.fn();}catch(e){if(typeof console!=='undefined'&&console.error)console.error(p.n+':',e);}});
+    if(location.hash){try{this.switchTab(location.hash.slice(1));}catch(e){if(typeof console!=='undefined'&&console.error)console.error('switchTab:',e);}}
     // Executive brief
     var brief=App.data.executive_brief;
-    if(brief){var card=App.$('exec-brief-card');var text=App.$('exec-brief-text');if(card&&text){card.style.display='block';text.textContent=brief;}}
+    if(brief){try{var card=App.$('exec-brief-card');var text=App.$('exec-brief-text');if(card&&text){card.style.display='block';text.textContent=brief;}}catch(e){if(typeof console!=='undefined'&&console.error)console.error('brief:',e);}}
   },
 
   $(id){return document.getElementById(id)},
@@ -738,36 +741,57 @@ const App={
         else{self._sortCol=th.dataset.col;        self._sortDir=col.dir!=null?col.dir:-1;}
         document.querySelectorAll('#tbl-head th').forEach(function(t){t.classList.remove('sorted');var a=t.querySelector('.sort-arrow');if(a)a.textContent='\u2195';});
         th.classList.add('sorted');var arrow=th.querySelector('.sort-arrow');if(arrow)arrow.textContent=self._sortDir===-1?'\u2193':'\u2191';
-        self._invalidateCache();self.render();
+        self._invalidateSortCache();self.render();
       });
-      if(this._searchEl)this._searchEl.addEventListener('input',function(e){self._search=e.target.value;self._invalidateCache();clearTimeout(self._searchTimer);self._searchTimer=setTimeout(function(){self.render();},300);});
-      this._fPriEl.addEventListener('change',function(e){self._fPri=e.target.value;self._invalidateCache();self.render();});
-      this._fSevEl.addEventListener('change',function(e){self._fSev=e.target.value;self._invalidateCache();self.render();});
-      this._fScanEl.addEventListener('change',function(e){self._fScan=e.target.value;self._invalidateCache();self.render();});
-      this._fKevEl.addEventListener('change',function(e){self._fKev=e.target.value;self._invalidateCache();self.render();});
+      // Event delegation for row clicks
+      var tb=App.$('tbl-body');
+      if(tb){tb.addEventListener('click',function(e){var tr=e.target.closest('.data-row');if(tr)App.findings.toggleDetail(tr);});}
+      if(this._searchEl)this._searchEl.addEventListener('input',function(e){self._search=e.target.value;self._invalidateFilterCache();clearTimeout(self._searchTimer);self._searchTimer=setTimeout(function(){self.render();},300);});
+      this._fPriEl.addEventListener('change',function(e){self._fPri=e.target.value;self._invalidateFilterCache();self.render();});
+      this._fSevEl.addEventListener('change',function(e){self._fSev=e.target.value;self._invalidateFilterCache();self.render();});
+      this._fScanEl.addEventListener('change',function(e){self._fScan=e.target.value;self._invalidateFilterCache();self.render();});
+      this._fKevEl.addEventListener('change',function(e){self._fKev=e.target.value;self._invalidateFilterCache();self.render();});
       this.render();
     },
-    _invalidateCache(){this._filteredCache=null;this._cacheKey='';},
+    _invalidateFilterCache(){this._filteredCache=null;this._filterKey='';this._invalidateSortCache();},
+    _invalidateSortCache(){this._sortedCache=null;this._sortKey='';},
     getFiltered(){
       var F=App.data.findings,q=this._search.toLowerCase(),self=this;
-      var key=this._search+'\x00'+this._fPri+'\x00'+this._fSev+'\x00'+this._fScan+'\x00'+this._fKev;
-      if(this._filteredCache!==null&&this._cacheKey===key)return this._filteredCache;
-      var result=F.filter(function(f){
-        if(self._fPri&&f.priority!==self._fPri)return false;
-        if(self._fSev&&f.severity!==self._fSev)return false;
-        if(self._fScan&&f.scanner!==self._fScan)return false;
-        if(self._fKev==='kev'&&!f.kev)return false;
-        if(self._fKev==='exploit'&&!f.exploit_available)return false;
-        if(q)return(f.title+f.cve+f.cwe+f.endpoint+f.product).toLowerCase().includes(q);
-        return true;
-      }).sort(function(a,b){
+      var filterKey=this._search+'\x00'+this._fPri+'\x00'+this._fSev+'\x00'+this._fScan+'\x00'+this._fKev;
+      var sortKey=this._sortCol+'\x00'+this._sortDir;
+      var filtered;
+      if(this._filteredCache!==null&&this._filterKey===filterKey){
+        filtered=this._filteredCache;
+      }else{
+        filtered=F.filter(function(f){
+          if(self._fPri&&f.priority!==self._fPri)return false;
+          if(self._fSev&&f.severity!==self._fSev)return false;
+          if(self._fScan&&f.scanner!==self._fScan)return false;
+          if(self._fKev==='kev'&&!f.kev)return false;
+          if(self._fKev==='exploit'&&!f.exploit_available)return false;
+          if(q){
+            var qLower=q;
+            return f.title.toLowerCase().includes(qLower)||
+                   (f.cve||'').toLowerCase().includes(qLower)||
+                   (f.cwe||'').toLowerCase().includes(qLower)||
+                   (f.endpoint||'').toLowerCase().includes(qLower)||
+                   (f.product||'').toLowerCase().includes(qLower);
+          }
+          return true;
+        });
+        this._filteredCache=filtered;this._filterKey=filterKey;
+      }
+      if(this._sortedCache!==null&&this._sortKey===sortKey&&this._filterKey===filterKey){
+        return this._sortedCache;
+      }
+      var result=filtered.slice().sort(function(a,b){
         var col=TABLE_COLUMNS.find(function(c){return c.k===self._sortCol;});
         if(col&&col.customSort)return col.customSort(a[self._sortCol],b[self._sortCol])*self._sortDir;
         var av=a[self._sortCol],bv=b[self._sortCol];
         if(typeof av==='number')return(av-bv)*self._sortDir;
         return String(av).localeCompare(String(bv))*self._sortDir;
       });
-      this._filteredCache=result;this._cacheKey=key;
+      this._sortedCache=result;this._sortKey=sortKey;
       return result;
     },
     render(){
@@ -781,7 +805,7 @@ const App={
       var title=f.title||'';
       var truncated=title.length>50?title.substring(0,50)+'...':title;
       var detailHtml=this.renderDetail(f);
-      return '<tr class="data-row" data-rank="'+f.rank+'" onclick="App.findings.toggleDetail(this)">'+
+      return '<tr class="data-row" data-rank="'+f.rank+'">'+
         '<td class="mono dimmed" style="font-size:11px">'+f.rank+'</td>'+
         '<td><span class="score-num" style="color:'+sc+'">'+f.score+'</span></td>'+
         '<td><span class="badge '+App.priClass(f.priority)+'">'+App.esc(f.priority)+'</span></td>'+
@@ -1017,10 +1041,11 @@ const App={
         App.state.ws.onerror=function(){};
       }catch(x){App.state.wsRetries++;}
     },
+    _setScannerEmpty(){var el=App.$('scanner-progress');if(el)el.innerHTML='<div class="empty-state" style="padding:var(--space-5)"><p class="empty-state-desc">No active scans</p></div>';},
     handleScanUpdate(job){
       var el=App.$('scanner-progress');if(!el)return;
       var existing=el.querySelector('[data-job="'+job.job_id+'"]');
-      if(!existing){el.innerHTML='';existing=document.createElement('div');existing.setAttribute('data-job',job.job_id);el.appendChild(existing);}
+      if(!existing){var empty=el.querySelector('.empty-state');if(empty)empty.remove();existing=document.createElement('div');existing.setAttribute('data-job',job.job_id);el.appendChild(existing);}
       var statusColors={pending:'#6B7280',running:'#3B82F6',completed:'#22C55E',failed:'#EF4444'};
       var sc=statusColors[job.status]||'#6B7280';
       // Elapsed assumes started_at is in seconds (Unix timestamp)
@@ -1094,7 +1119,8 @@ const App={
         var now=new Date();
         var rows=tracked.slice(0,100).map(function(f){
           var sc=statusConfig[f.status]||{color:'#6B7280',border:'#6B7280'};
-          var isBreach=f.sla_deadline&&new Date(f.sla_deadline)<now&&(f.status==='open'||f.status==='in_progress');
+          var isBreach=false;
+        if(f.sla_deadline){var slaDate=new Date(f.sla_deadline);if(!isNaN(slaDate.getTime()))isBreach=slaDate<now&&(f.status==='open'||f.status==='in_progress');}
           return '<tr><td>'+App.esc(f.product)+'</td><td><span class="badge '+App.sevClass(f.severity)+'">'+App.esc(f.severity)+'</span></td><td class="truncate" style="max-width:200px;color:var(--text-primary);font-weight:500">'+App.esc(f.title)+'</td><td class="no-wrap">'+(f.cve?App.esc(f.cve):'<span class="dimmed">\u2014</span>')+'</td><td><span class="status-border" style="border-color:'+sc.border+';color:'+sc.color+';font-size:11px">'+f.status.replace('_',' ')+'</span></td><td class="no-wrap" style="font-size:11px;'+(isBreach?'color:var(--risk-critical);font-weight:700':'color:var(--text-muted)')+'">'+(isBreach?'BREACHED':'OK')+'</td><td class="dimmed" style="font-size:11px">'+App.esc(f.owner||'\u2014')+'</td></tr>';
         }).join('');
         App.$('lc-table-wrap').innerHTML='<table class="data-table"><thead><tr><th>Product</th><th>Severity</th><th>Title</th><th>CVE</th><th>Status</th><th>SLA</th><th>Owner</th></tr></thead><tbody>'+rows+'</tbody></table>';
@@ -1139,8 +1165,10 @@ const App={
           var top=overlaps.slice(0,10);
           new Chart(App.$('c-dedup-overlap'),{type:'bar',data:{labels:top.map(function(o){return(o.cve||o.vulnerability||'').substring(0,25);}),datasets:[{data:top.map(function(o){return(o.scanners_found_it||[]).length;}),backgroundColor:CHART_COLORS.overlapBar,borderWidth:0,borderRadius:4}]},options:{indexAxis:'y',scales:{x:{grid:{color:App.gridColor},ticks:{font:{size:10},color:'#9CA3AF'}},y:{grid:{display:false},ticks:{font:{size:10},color:'#9CA3AF'}}},plugins:{legend:{display:false}}}});
         }else{
-          // Hide canvas instead of destroying it (data may arrive later)
-          App.$('c-dedup-overlap').parentElement.innerHTML='<div class="card-header">Top Overlaps</div><div class="empty-state" style="height:200px"><p class="empty-state-desc">No cross-scanner overlaps</p></div>';
+          // Hide canvas, don't destroy (data may arrive later)
+          var cv=App.$('c-dedup-overlap');if(cv)cv.style.display='none';
+          var par=cv?cv.parentElement:null;
+          if(par&&!par.querySelector('.empty-state-overlay')){var ov=document.createElement('div');ov.className='empty-state-overlay';ov.style.cssText='display:flex;align-items:center;justify-content:center;height:200px;color:var(--text-tertiary);font-size:var(--text-xs)';ov.textContent='No cross-scanner overlaps';par.appendChild(ov);}
         }
       }
       // Overlap table
