@@ -145,7 +145,7 @@ class LoginRequest(BaseModel):
     password: str
 
 class LoginResponse(BaseModel):
-    token: str
+    status: str = "ok"
     expires_in: int
     username: str
 
@@ -184,7 +184,7 @@ async def login(request: Request, req: LoginRequest):
     from .auth import _DEFAULT_TTL
     token = create_token(req.username, ttl_seconds=_DEFAULT_TTL)
     response = JSONResponse(content={
-        "token": token,
+        "status": "ok",
         "expires_in": _DEFAULT_TTL,
         "username": req.username,
     })
@@ -874,7 +874,7 @@ transition:opacity .2s;margin-top:8px}
     </div>
     <div class="field">
       <label>Password</label>
-      <input id="password" type="password" value="admin">
+      <input id="password" type="password" placeholder="Enter password">
     </div>
     <button class="btn" type="submit" id="login-btn">Sign In</button>
     <div class="error" id="error-msg"></div>
@@ -898,7 +898,6 @@ document.getElementById('login-form').addEventListener('submit', async(e)=>{
     });
     const data=await resp.json();
     if(!resp.ok)throw new Error(data.detail||'Login failed');
-    localStorage.setItem('username',data.username);
     window.location.href='/dashboard';
   }catch(e){err.textContent=e.message;err.style.display='block';}
   finally{btn.disabled=false;btn.textContent='Sign In';}

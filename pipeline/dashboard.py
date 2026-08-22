@@ -462,18 +462,15 @@ const cardCfg={plugins:{legend:{display:false}},maintainAspectRatio:false};
 let apInited=false;
 let HAS_CHART=false;
 
-// Auth helpers
-const API_TOKEN=localStorage.getItem('token')||'';
+// Auth helpers — token is in HttpOnly cookie, browser sends it automatically
 function apiHeaders(extra){
-  const h=Object.assign({'Content-Type':'application/json'},extra||{});
-  if(API_TOKEN)h['Authorization']='Bearer '+API_TOKEN;
-  return h;
+  return Object.assign({'Content-Type':'application/json'},extra||{});
 }
 function apiFetch(url,opts){
   opts=opts||{};
   opts.headers=apiHeaders(opts.headers);
   return fetch(url,opts).then(function(r){
-    if(r.status===401){localStorage.removeItem('token');window.location.href='/';return{};}
+    if(r.status===401){window.location.href='/';return{};}
     return r.json();
   });
 }
@@ -815,10 +812,10 @@ function loadAppStatus(){
 
 var ws=null;
 function connectWebSocket(){
-  var token=API_TOKEN;if(!token||typeof WebSocket==='undefined')return;
+  if(typeof WebSocket==='undefined')return;
   var proto=location.protocol==='https:'?'wss:':'ws:';
   try{
-    ws=new WebSocket(proto+'//'+location.host+'/ws/live?token='+token);
+    ws=new WebSocket(proto+'//'+location.host+'/ws/live');
     ws.onmessage=function(e){try{var msg=JSON.parse(e.data);if(msg.type==='scan_update')handleScanUpdate(msg.data);}catch(x){}};
     ws.onclose=function(){setTimeout(connectWebSocket,5000);};
     ws.onerror=function(){};
