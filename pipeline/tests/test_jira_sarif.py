@@ -5,7 +5,6 @@ import json
 import os
 import tempfile
 
-import pytest
 
 from pipeline.sarif_export import (
     findings_to_sarif,
@@ -50,7 +49,7 @@ class TestSARIFExport:
     def test_finding_to_sarif_result(self):
         f = _make_finding()
         result = finding_to_sarif_result(f)
-        assert result["ruleId"] == "CVE-2024-1234"
+        assert result["ruleId"] == "CWE-89"  # CWE preferred over CVE for consistent rule keying
         assert result["level"] == "error"  # high → error
         assert result["properties"]["severity"] == "high"
         assert result["properties"]["score"] == 85.0

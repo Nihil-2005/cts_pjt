@@ -27,6 +27,7 @@ Cascade logic:
 Every call is gracefully guarded: failures in any tier fall through to the
 next. The pipeline NEVER fails due to AI unavailability.
 """
+
 from __future__ import annotations
 
 import json
@@ -51,6 +52,7 @@ OLLAMA_TIMEOUT = 30
 # Tier 1: Groq (free cloud API, blazing fast)
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 class GroqClient:
     """Client for the Groq free API (OpenAI-compatible chat completions)."""
 
@@ -68,13 +70,17 @@ class GroqClient:
             return False
         try:
             # Lightweight check — send a minimal request
-            payload = json.dumps({
-                "model": self.model,
-                "messages": [{"role": "user", "content": "hi"}],
-                "max_tokens": 1,
-            }).encode("utf-8")
+            payload = json.dumps(
+                {
+                    "model": self.model,
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "max_tokens": 1,
+                }
+            ).encode("utf-8")
             req = urllib.request.Request(
-                GROQ_API_URL, data=payload, method="POST",
+                GROQ_API_URL,
+                data=payload,
+                method="POST",
                 headers={
                     "Authorization": f"Bearer {self.api_key}",
                     "Content-Type": "application/json",
@@ -92,17 +98,21 @@ class GroqClient:
 
     def chat(self, system: str, user: str, temperature: float = 0.3) -> str:
         """Send a chat completion request."""
-        payload = json.dumps({
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            "temperature": temperature,
-            "max_tokens": 512,
-        }).encode("utf-8")
+        payload = json.dumps(
+            {
+                "model": self.model,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                "temperature": temperature,
+                "max_tokens": 512,
+            }
+        ).encode("utf-8")
         req = urllib.request.Request(
-            GROQ_API_URL, data=payload, method="POST",
+            GROQ_API_URL,
+            data=payload,
+            method="POST",
             headers={
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",
@@ -116,6 +126,7 @@ class GroqClient:
 # ═══════════════════════════════════════════════════════════════════════════════
 # Tier 2: Ollama (local, private, free)
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 class OllamaClient:
     """Client for the Ollama local HTTP API."""
@@ -141,8 +152,10 @@ class OllamaClient:
             if self._available:
                 print(f"  [ollama] detected — using {self.model}")
             else:
-                print(f"  [ollama] running but model '{self.model}' not found "
-                      f"(available: {', '.join(models[:5])})")
+                print(
+                    f"  [ollama] running but model '{self.model}' not found "
+                    f"(available: {', '.join(models[:5])})"
+                )
             return self._available
         except Exception:
             self._available = False
@@ -150,18 +163,22 @@ class OllamaClient:
 
     def chat(self, system: str, user: str, temperature: float = 0.3) -> str:
         """Send a chat message to Ollama."""
-        payload = json.dumps({
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            "stream": False,
-            "options": {"temperature": temperature, "num_predict": 512},
-        }).encode("utf-8")
+        payload = json.dumps(
+            {
+                "model": self.model,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                "stream": False,
+                "options": {"temperature": temperature, "num_predict": 512},
+            }
+        ).encode("utf-8")
         req = urllib.request.Request(
-            f"{self.base_url}/api/chat", data=payload,
-            headers={"Content-Type": "application/json"}, method="POST",
+            f"{self.base_url}/api/chat",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
         )
         with urllib.request.urlopen(req, timeout=OLLAMA_TIMEOUT) as resp:
             data = json.loads(resp.read().decode("utf-8"))
@@ -210,12 +227,13 @@ Use non-technical language. Be specific and direct."""
 # JSON parsing helper
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 def _safe_json_array(raw: str, expected_len: int) -> List[Any]:
     """Strip markdown fences and parse a JSON array. Pad short results."""
     cleaned = raw.strip()
     for fence in ("```json", "```"):
         if cleaned.startswith(fence):
-            cleaned = cleaned[len(fence):]
+            cleaned = cleaned[len(fence) :]
     cleaned = cleaned.rstrip("`").strip()
     try:
         result = json.loads(cleaned)
@@ -232,18 +250,26 @@ def _safe_json_array(raw: str, expected_len: int) -> List[Any]:
 # LLM task functions (used by both Groq and Ollama)
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
+def _escape_prompt(text: str) -> str:
+    """Escape prompt injection delimiters in untrusted text."""
+    return text.replace("<|", "<\\|").replace("|>", "|\\>")
+
+
 def _llm_classify_fp(client, findings: List[Finding]) -> List[Dict[str, Any]]:
     """Ask the LLM to classify false-positive probability for a batch."""
     items = []
     for i, f in enumerate(findings):
         kev_tag = " [KEV]" if f.kev else ""
         exploit_tag = " [EXPLOIT]" if f.exploit_available else ""
+        evidence = _escape_prompt(str(f.evidence)[:100] or "none")
+        title = _escape_prompt(f.title)
         items.append(
-            f"{i + 1}. [{f.scanner}] {f.title} "
+            f"{i + 1}. [{f.scanner}] {title} "
             f"(severity={f.severity}, cwe={f.cwe or 'none'}, "
             f"cve={f.cve or 'none'}{kev_tag}{exploit_tag}) "
             f"endpoint={f.endpoint or 'none'} "
-            f"evidence={str(f.evidence)[:100] or 'none'}"
+            f"evidence=<|EVIDENCE|>{evidence}<|/EVIDENCE|>"
         )
     user_msg = "Classify these findings:\n\n" + "\n".join(items)
     raw = client.chat(_FP_SYSTEM_PROMPT, user_msg)
@@ -256,9 +282,11 @@ def _llm_remediation(client, findings: List[Finding]) -> List[str]:
     for i, f in enumerate(findings):
         pkg = ""
         if f.package:
-            pkg = (f" package={f.package}"
-                   f" installed={f.installed_version or '?'}"
-                   f" fixed={f.fixed_version or 'unknown'}")
+            pkg = (
+                f" package={f.package}"
+                f" installed={f.installed_version or '?'}"
+                f" fixed={f.fixed_version or 'unknown'}"
+            )
         items.append(
             f"{i + 1}. {f.title} "
             f"(cwe={f.cwe or 'none'}, cve={f.cve or 'none'}, "
@@ -271,8 +299,7 @@ def _llm_remediation(client, findings: List[Finding]) -> List[str]:
     return _safe_json_array(raw, len(findings))
 
 
-def _llm_executive_brief(client, ranked: List[Finding],
-                         summary_stats: Dict) -> str:
+def _llm_executive_brief(client, ranked: List[Finding], summary_stats: Dict) -> str:
     """Ask the LLM to write an executive brief."""
     top_lines = []
     for f in ranked[:5]:
@@ -297,23 +324,49 @@ def _llm_executive_brief(client, ranked: List[Finding],
 # ═══════════════════════════════════════════════════════════════════════════════
 
 _FP_TITLE_PATTERNS = [
-    "server header", "x-content-type-options", "x-frame-options",
-    "x-xss-protection", "content security policy", "strict transport",
-    "hsts", "cookie without httponly", "cookie without secure",
-    "cookie without samesite", "cross-domain", "x-powered-by",
-    "server disclosure", "information disclosure - server",
-    "clickjacking", "anti-clickjacking", "x-content-type",
-    "cache-control", "pragma", "referrer-policy",
+    "server header",
+    "x-content-type-options",
+    "x-frame-options",
+    "x-xss-protection",
+    "content security policy",
+    "strict transport",
+    "hsts",
+    "cookie without httponly",
+    "cookie without secure",
+    "cookie without samesite",
+    "cross-domain",
+    "x-powered-by",
+    "server disclosure",
+    "information disclosure - server",
+    "clickjacking",
+    "anti-clickjacking",
+    "x-content-type",
+    "cache-control",
+    "pragma",
+    "referrer-policy",
 ]
 
 _FP_CWES = {"CWE-200", "CWE-319", "CWE-261", "CWE-16"}
 _REAL_CWES = {
-    "CWE-89", "CWE-78", "CWE-94", "CWE-22", "CWE-502", "CWE-434",
-    "CWE-918", "CWE-352", "CWE-79", "CWE-798", "CWE-287",
+    "CWE-89",
+    "CWE-78",
+    "CWE-94",
+    "CWE-22",
+    "CWE-502",
+    "CWE-434",
+    "CWE-918",
+    "CWE-352",
+    "CWE-79",
+    "CWE-798",
+    "CWE-287",
 }
 _SCANNER_NOISE = {
-    "zap": 0.15, "wapiti": 0.10, "nuclei": 0.05,
-    "trivy": 0.03, "nmap": 0.12, "openvas": 0.08,
+    "zap": 0.15,
+    "wapiti": 0.10,
+    "nuclei": 0.05,
+    "trivy": 0.03,
+    "nmap": 0.12,
+    "openvas": 0.08,
 }
 
 
@@ -405,7 +458,9 @@ def _ai_remediation(f: Finding) -> str:
     base = _CONTEXTUAL_REMEDIATION.get(cwe, _GENERIC_REMEDIATION)
     parts = [base]
     if f.scanner == "trivy" and f.fixed_version:
-        parts.append(f"Upgrade {f.package} from {f.installed_version} to {f.fixed_version}.")
+        parts.append(
+            f"Upgrade {f.package} from {f.installed_version} to {f.fixed_version}."
+        )
     elif f.kev:
         parts.append(f"({f.cve}) is in CISA KEV — treat as urgent.")
     elif f.epss_percentile and f.epss_percentile > 0.8:
@@ -418,44 +473,57 @@ def _enhance_remediation(findings: List[Finding]) -> int:
     for f in findings:
         if f.status != "active":
             continue
-        has_ai = any(s.get("kind") == "ai_remediation" for s in f.remediation_suggestions)
+        has_ai = any(
+            s.get("kind") == "ai_remediation" for s in f.remediation_suggestions
+        )
         if not has_ai:
-            f.remediation_suggestions.insert(0, {
-                "kind": "ai_remediation", "text": _ai_remediation(f),
-                "source": "rule-based-heuristics",
-            })
+            f.remediation_suggestions.insert(
+                0,
+                {
+                    "kind": "ai_remediation",
+                    "text": _ai_remediation(f),
+                    "source": "rule-based-heuristics",
+                },
+            )
             count += 1
     return count
 
 
 # ── Rule-based executive brief ────────────────────────────────────────────────
 
+
 def _executive_brief(ranked: List[Finding], summary_stats: Dict) -> str:
     total = summary_stats.get("raw_findings", 0)
     active = summary_stats.get("final_findings", 0)
     unique = summary_stats.get("unique_findings", 0)
-    p1 = summary_stats.get("p1", 0)
-    p2 = summary_stats.get("p2", 0)
     noise_pct = round((1 - active / max(total, 1)) * 100)
+
+    # Count by severity
+    sev = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
+    for f in ranked:
+        s = f.severity or "info"
+        if s in sev:
+            sev[s] += 1
+        else:
+            sev["info"] += 1
 
     top = ranked[0] if ranked else None
     top_line = ""
     if top:
-        kev = " (CISA KEV)" if top.kev else ""
-        top_line = (f"Top risk: \"{top.title}\" ({top.severity}, "
-                    f"score {top.score}/100){kev}.")
+        kev = " [KEV]" if top.kev else ""
+        exploit = " [EXPLOIT]" if top.exploit_available else ""
+        top_line = (
+            f'Top risk: "{top.title}" ({top.severity}, score {top.score}/100){kev}{exploit}.'
+        )
 
     return (
-        f"Analyzed {total} findings → {active} actionable "
-        f"({noise_pct}% noise removed). "
-        f"P1: {p1}, P2: {p2}. "
+        f"Analyzed {total} findings → {unique} unique → "
+        f"{active} actionable ({noise_pct}% noise removed). "
+        f"Critical: {sev['critical']}, High: {sev['high']}, Medium: {sev['medium']}, Low: {sev['low']}. "
         f"{top_line or 'No active findings.'}"
     )
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Main entry point — 3-tier cascade
-# ═══════════════════════════════════════════════════════════════════════════════
 
 def ai_enrich(
     findings: List[Finding],
@@ -497,10 +565,7 @@ def ai_enrich(
         f.score_breakdown["ai_fp_probability"] = fp_prob
         f.score_breakdown["ai_fp_reason"] = fp_reason
         f.score_breakdown["ai_fp_source"] = "rule-based"
-        if fp_prob > 0.6 and f.score is not None:
-            penalty = round((fp_prob - 0.6) * 25, 1)
-            f.score = max(0, round(f.score - penalty, 1))
-            f.score_breakdown["ai_fp_penalty"] = -penalty
+        # DO NOT penalize score here — wait for final blended probability
         result["counts"]["fp_classified"] += 1
 
     if not skip_remediation:
@@ -536,9 +601,14 @@ def ai_enrich(
         tier = result["llm_tier"]
         print(f"  [ai-enrich] enhancing with {tier} …")
 
-        # LLM FP classification
+        # LLM FP classification (batched to avoid truncation)
         try:
-            llm_results = _llm_classify_fp(ai_client, active)
+            llm_results = []
+            batch_size = 10
+            for i in range(0, len(active), batch_size):
+                batch = active[i : i + batch_size]
+                batch_results = _llm_classify_fp(ai_client, batch)
+                llm_results.extend(batch_results)
             for f, llm in zip(active, llm_results):
                 if isinstance(llm, dict) and "fp_probability" in llm:
                     llm_prob = float(llm["fp_probability"])
@@ -547,18 +617,19 @@ def ai_enrich(
                     blended = round(0.6 * llm_prob + 0.4 * old_prob, 3)
                     f.score_breakdown["ai_fp_probability"] = blended
                     f.score_breakdown["ai_fp_reason"] = (
-                        f"[{tier}] {llm_reason}" if llm_reason else
-                        f"Rule: {f.score_breakdown.get('ai_fp_reason', '')}"
+                        f"[{tier}] {llm_reason}"
+                        if llm_reason
+                        else f"Rule: {f.score_breakdown.get('ai_fp_reason', '')}"
                     )
                     f.score_breakdown["ai_fp_source"] = f"{tier}+rule"
+                    # Apply penalty ONCE based on blended probability
                     if f.score is not None:
                         if blended > 0.6:
                             penalty = round((blended - 0.6) * 25, 1)
                             f.score = max(0, round(f.score - penalty, 1))
                             f.score_breakdown["ai_fp_penalty"] = -penalty
                         elif "ai_fp_penalty" in f.score_breakdown:
-                            f.score = round(
-                                f.score + abs(f.score_breakdown["ai_fp_penalty"]), 1)
+                            # Remove penalty if blended <= 0.6
                             del f.score_breakdown["ai_fp_penalty"]
             result["llm_used"] = True
             print(f"  [ai-enrich] {tier} FP classification complete")
@@ -574,11 +645,18 @@ def ai_enrich(
                 for f, rem_text in zip(top_20, llm_rems):
                     if isinstance(rem_text, str) and len(rem_text) > 20:
                         idx = next(
-                            (i for i, s in enumerate(f.remediation_suggestions)
-                             if s.get("kind") == "ai_remediation"), None)
+                            (
+                                i
+                                for i, s in enumerate(f.remediation_suggestions)
+                                if s.get("kind") == "ai_remediation"
+                            ),
+                            None,
+                        )
                         if idx is not None:
                             f.remediation_suggestions[idx]["text"] = rem_text
-                            f.remediation_suggestions[idx]["source"] = f"{tier}:{ai_client.model}"
+                            f.remediation_suggestions[idx]["source"] = (
+                                f"{tier}:{ai_client.model}"
+                            )
                             enhanced += 1
                 result["counts"]["remediation"] += enhanced
                 print(f"  [ai-enrich] {tier} remediation: {enhanced} enhanced")
@@ -594,6 +672,16 @@ def ai_enrich(
                     print(f"  [ai-enrich] {tier} executive brief generated")
             except Exception as exc:
                 print(f"  [ai-enrich] {tier} executive brief failed: {exc}")
+
+    # ── Apply FP penalty for findings not processed by LLM ──────────────────
+    # When LLM is unavailable, apply penalty from rule-based probability only
+    for f in active:
+        if "ai_fp_penalty" not in f.score_breakdown and f.score is not None:
+            fp_prob = f.score_breakdown.get("ai_fp_probability", 0.5)
+            if fp_prob > 0.6:
+                penalty = round((fp_prob - 0.6) * 25, 1)
+                f.score = max(0, round(f.score - penalty, 1))
+                f.score_breakdown["ai_fp_penalty"] = -penalty
 
     # ── Rule-based executive brief (always, as fallback) ──────────────────
     if not result["executive_brief"] and summary_stats:

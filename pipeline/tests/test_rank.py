@@ -21,13 +21,13 @@ class TestRank(unittest.TestCase):
         self.assertEqual(ranked[1].score, 20.0)
 
     def test_priority_assignment(self):
-        """Findings should get correct priority based on score."""
+        """Findings should get correct priority based on severity."""
         f = Finding(scanner="trivy", product="app", title="Critical",
                     severity="critical")
         f.score = 95.0
         config = Config({"products": {"app": {}}})
         ranked = rank_findings([f], config)
-        self.assertEqual(ranked[0].priority, "P1")
+        self.assertEqual(ranked[0].priority, "Critical")
         self.assertEqual(ranked[0].sla_hours, 24)
 
     def test_kev_tiebreak(self):

@@ -1,7 +1,4 @@
 """Unit tests for scanner report normalization."""
-import json
-import os
-import tempfile
 import unittest
 
 from pipeline.normalize import parse_zap, parse_nuclei, parse_wapiti, parse_trivy

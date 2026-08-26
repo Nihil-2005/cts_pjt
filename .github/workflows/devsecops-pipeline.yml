@@ -1,4 +1,4 @@
-name: 🔒 DevSecOps Risk Intelligence Pipeline
+name: DevSecOps Risk Intelligence Pipeline
 
 on:
   push:
@@ -6,239 +6,109 @@ on:
   pull_request:
     branches: [main]
   schedule:
-    - cron: "0 2 * * 1"  # Weekly Monday 02:00 UTC
-  workflow_dispatch:      # Manual trigger
+    - cron: "0 2 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  actions: read
 
 env:
   PYTHON_VERSION: "3.12"
-  TARGETS_COMPOSE: "./targets/docker-compose.yml"
 
 jobs:
-  # ═══════════════════════════════════════════════════════════════
-  # JOB 0: Run Tests
-  # ═══════════════════════════════════════════════════════════════
-  test:
+  pipeline:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
-      - name: 📦 Install Dependencies
+
+      - name: Install Dependencies
         run: pip install -r requirements.txt
-      - name: 🧪 Run Tests
+
+      - name: Run Tests
         run: python -m pytest pipeline/tests/ -v --tb=short
 
-  # ═══════════════════════════════════════════════════════════════
-  # JOB 1: Deploy Target Applications
-  # ═══════════════════════════════════════════════════════════════
-  deploy-targets:
-    needs: test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: 🐳 Start Target Applications
+      - name: Start Target Applications
         run: |
-          docker compose -f ${{ env.TARGETS_COMPOSE }} up -d
-          echo "⏳ Waiting for targets to be healthy..."
-          sleep 30
-          
-          # Health checks
-          for url in "http://localhost:4000" "http://localhost:3000" "http://localhost:80"; do
-            for i in {1..10}; do
-              curl -s -o /dev/null -w "%{http_code}" "$url" | grep -q "200\|302\|401" && break
-              echo "  Waiting for $url..."
-              sleep 5
-            done
+          docker compose -f targets/docker-compose.yml up -d
+          echo "Waiting for targets..."
+          for i in $(seq 1 30); do
+            curl -s --max-time 5 http://localhost:3000 >/dev/null 2>&1 && \
+            curl -s --max-time 5 http://localhost:4000 >/dev/null 2>&1 && \
+            curl -s --max-time 5 http://localhost:8080 >/dev/null 2>&1 && break
+            sleep 2
           done
-          echo "✅ All targets are up"
+          echo "Targets ready"
 
-      - name: 📋 Verify Targets
+      - name: Run Scanners
         run: |
-          echo "NodeGoat: $(curl -s -o /dev/null -w '%{http_code}' http://localhost:4000 || echo 'DOWN')"
-          echo "Juice Shop: $(curl -s -o /dev/null -w '%{http_code}' http://localhost:3000 || echo 'DOWN')"
-          echo "bWAPP: $(curl -s -o /dev/null -w '%{http_code}' http://localhost:80 || echo 'DOWN')"
+          mkdir -p scan_reports
+          # Nuclei
+          docker run --rm --network=host \
+            -v $(pwd)/scan_reports:/out \
+            projectdiscovery/nuclei:v3.3.0 \
+            -u http://localhost:3000 -jsonl -o /out/juiceshop_nuclei.json || true
+          docker run --rm --network=host \
+            -v $(pwd)/scan_reports:/out \
+            projectdiscovery/nuclei:v3.3.0 \
+            -u http://localhost:4000 -jsonl -o /out/nodegoat_nuclei.json || true
+          docker run --rm --network=host \
+            -v $(pwd)/scan_reports:/out \
+            projectdiscovery/nuclei:v3.3.0 \
+            -u http://localhost:8080 -jsonl -o /out/bwapp_nuclei.json || true
+          # ZAP (baseline mode, resource-limited)
+          docker run --rm --network=host \
+            --memory=1g --cpus=1 \
+            -v $(pwd)/scan_reports:/zap/wrk \
+            ghcr.io/zaproxy/zaproxy:2.15.0 \
+            zap-baseline.py -t http://localhost:3000 \
+            -J /zap/wrk/juiceshop_zap.json || true
+          docker run --rm --network=host \
+            --memory=1g --cpus=1 \
+            -v $(pwd)/scan_reports:/zap/wrk \
+            ghcr.io/zaproxy/zaproxy:2.15.0 \
+            zap-baseline.py -t http://localhost:4000 \
+            -J /zap/wrk/nodegoat_zap.json || true
+          docker run --rm --network=host \
+            --memory=1g --cpus=1 \
+            -v $(pwd)/scan_reports:/zap/wrk \
+            ghcr.io/zaproxy/zaproxy:2.15.0 \
+            zap-baseline.py -t http://localhost:8080 \
+            -J /zap/wrk/bwapp_zap.json || true
 
-  # ═══════════════════════════════════════════════════════════════
-  # JOB 2: Run Scanners (Parallel Matrix)
-  # ═══════════════════════════════════════════════════════════════
-  scan:
-    needs: deploy-targets
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - scanner: nuclei
-            target: nodegoat
-            url: http://localhost:4000
-            cmd: |
-              docker run --rm --network=host \
-                -v $(pwd)/scan_reports:/out \
-                projectdiscovery/nuclei:v3.3.0 \
-                -u http://localhost:4000 \
-                -j -o /out/nodegoat_nuclei.json
-          
-          - scanner: nuclei
-            target: juiceshop
-            url: http://localhost:3000
-            cmd: |
-              docker run --rm --network=host \
-                -v $(pwd)/scan_reports:/out \
-                projectdiscovery/nuclei:v3.3.0 \
-                -u http://localhost:3000 \
-                -j -o /out/juiceshop_nuclei.json
-          
-          - scanner: nuclei
-            target: bwapp
-            url: http://localhost:80
-            cmd: |
-              docker run --rm --network=host \
-                -v $(pwd)/scan_reports:/out \
-                projectdiscovery/nuclei:v3.3.0 \
-                -u http://localhost:80 \
-                -j -o /out/bwapp_nuclei.json
-          
-          - scanner: zap
-            target: nodegoat
-            cmd: |
-              docker run --rm --network=host \
-                -v $(pwd)/scan_reports:/zap/wrk \
-                ghcr.io/zaproxy/zaproxy:2.15.0 \
-                zap-baseline.py -t http://localhost:4000 \
-                -J /zap/wrk/nodegoat_zap.json || true
-          
-          - scanner: zap
-            target: juiceshop
-            cmd: |
-              docker run --rm --network=host \
-                -v $(pwd)/scan_reports:/zap/wrk \
-                ghcr.io/zaproxy/zaproxy:2.15.0 \
-                zap-baseline.py -t http://localhost:3000 \
-                -J /zap/wrk/juiceshop_zap.json || true
-          
-          - scanner: zap
-            target: bwapp
-            cmd: |
-              docker run --rm --network=host \
-                -v $(pwd)/scan_reports:/zap/wrk \
-                ghcr.io/zaproxy/zaproxy:2.15.0 \
-                zap-baseline.py -t http://localhost:80 \
-                -J /zap/wrk/bwapp_zap.json || true
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: 🔍 Run ${{ matrix.scanner }} on ${{ matrix.target }}
-        run: ${{ matrix.cmd }}
-
-      - name: 📤 Upload Scan Reports
-        uses: actions/upload-artifact@v4
-        with:
-          name: scan-${{ matrix.scanner }}-${{ matrix.target }}
-          path: scan_reports/
-          retention-days: 7
-
-  # ═══════════════════════════════════════════════════════════════
-  # JOB 3: Process Pipeline (All 8 Stages)
-  # ═══════════════════════════════════════════════════════════════
-  process-pipeline:
-    needs: scan
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          cache: pip
-
-      - name: 📦 Install Dependencies
-        run: pip install -r requirements.txt
-
-      - name: 📥 Download All Scan Reports
-        uses: actions/download-artifact@v4
-        with:
-          path: scan_reports/
-          pattern: scan-*
-
-      - name: 🧠 Run 8-Stage Risk Pipeline
+      - name: Run 9-Stage Risk Pipeline
         env:
           NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
         run: |
           mkdir -p outputs
-          
-          # Stage 1-8: Full pipeline (3-tier AI: Groq → Ollama → Rule-based)
           python -m pipeline.run \
             --reports scan_reports/ \
             --config config.json \
             --out outputs/
 
-      - name: 🎫 Auto-Create GitHub Issues (P1/P2)
-        if: github.event_name != 'pull_request'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          python -m pipeline.github_tickets \
-            --findings outputs/ranked_findings.json \
-            --threshold 60 \
-            --repo ${{ github.repository }} \
-            --dry-run
-
-      - name: 📋 Show Pipeline Summary
-        if: always()
-        run: |
-          echo "═══════════════════════════════════════════"
-          echo "  PIPELINE EXECUTION SUMMARY"
-          echo "═══════════════════════════════════════════"
-          cat outputs/noise_reduction.json 2>/dev/null || echo "No metrics found"
-          echo ""
-          echo "Top 5 Actions:"
-          head -40 outputs/top_actions.md 2>/dev/null || echo "No actions found"
-
-      - name: 📤 Upload Pipeline Outputs
+      - name: Upload Pipeline Outputs
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: pipeline-outputs-${{ github.run_number }}
           retention-days: 30
           path: |
-            outputs/ranked_findings.csv
-            outputs/ranked_findings.json
-            outputs/analytics.csv
-            outputs/top_actions.md
-            outputs/tickets_ready.md
-            outputs/noise_reduction.json
-            outputs/risk_dashboard.html
-            outputs/history.db
-            outputs/attack_paths.json
+            outputs/
 
-  # ═══════════════════════════════════════════════════════════════
-  # JOB 4: Security Gate (Block PR if Critical Findings)
-  # ═══════════════════════════════════════════════════════════════
-  security-gate:
-    needs: process-pipeline
-    runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
-    steps:
-      - name: 📥 Download Pipeline Outputs
-        uses: actions/download-artifact@v4
-        with:
-          name: pipeline-outputs-${{ github.run_number }}
-          path: outputs/
-
-      - name: 🚫 Security Gate Check
+      - name: Security Gate Check
+        if: github.event_name == 'pull_request'
         run: |
           P1_COUNT=$(python -c "import json; d=json.load(open('outputs/noise_reduction.json')); print(d.get('p1', 0))")
           echo "P1 Findings: $P1_COUNT"
-          
           if [ "$P1_COUNT" -gt 0 ]; then
-            echo "❌ SECURITY GATE FAILED: $P1_COUNT P1 finding(s) detected"
-            echo "Review outputs/ranked_findings.csv before merging"
+            echo "SECURITY GATE FAILED: $P1_COUNT P1 finding(s)"
             exit 1
-          else
-            echo "✅ Security gate passed — no P1 findings"
           fi

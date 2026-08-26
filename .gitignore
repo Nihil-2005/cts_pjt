@@ -23,6 +23,7 @@ env/
 .env
 .env.local
 .env.*
+.secret
 
 # Pipeline outputs (generated, not committed)
 outputs/
@@ -44,6 +45,23 @@ htmlcov/
 .coverage
 .coverage.*
 coverage.xml
+
+# Junk files
+logs.txt
+chart_test.js
+dash_test.html
+*.csv
+.last_update
+*.log
+
+# Debug/temp files (one-shot scripts, diagnostics)
+_*.py
+_*.js
+_*.ps1
+_*.html
+CDP_*.json
+_dom_err.log
+dashboard_err.log
 
 # Docker
 docker-compose.override.yml

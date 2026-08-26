@@ -10,9 +10,10 @@ PRODUCT = {"asset_criticality": 5, "business_impact": 5, "exposure": 5,
            "control_effectiveness": 3, "data_sensitivity": 5}
 
 
-def mk(severity="high", cve=None, epss_pct=None, kev=False, exploit=False):
+def mk(severity="high", cve=None, epss_pct=None, epss_prob=None, kev=False, exploit=False):
     f = Finding(scanner="trivy", product="app", title="t", severity=severity, cve=cve)
     f.epss_percentile = epss_pct
+    f.epss_score = epss_prob  # probability (real risk measure)
     f.kev = kev
     f.exploit_available = exploit
     return f
@@ -21,14 +22,14 @@ def mk(severity="high", cve=None, epss_pct=None, kev=False, exploit=False):
 class TestScore(unittest.TestCase):
     def test_kev_medium_outranks_nonkev_high(self):
         """The rubric's 'not raw CVSS alone' test."""
-        kev_medium = mk(severity="medium", epss_pct=0.9, kev=True, exploit=True)
-        plain_high = mk(severity="high", epss_pct=0.05)
+        kev_medium = mk(severity="medium", epss_prob=0.9, kev=True, exploit=True)
+        plain_high = mk(severity="high", epss_prob=0.05)
         compute_score(kev_medium, PRODUCT, WEIGHTS)
         compute_score(plain_high, PRODUCT, WEIGHTS)
         self.assertGreater(kev_medium.score, plain_high.score)
 
     def test_score_in_range_and_explainable(self):
-        f = mk(severity="critical", epss_pct=1.0, kev=True, exploit=True)
+        f = mk(severity="critical", epss_prob=1.0, kev=True, exploit=True)
         bd = compute_score(f, PRODUCT, WEIGHTS)
         self.assertLessEqual(f.score, 100)
         self.assertGreaterEqual(f.score, 0)
@@ -47,7 +48,7 @@ class TestScore(unittest.TestCase):
         self.assertGreater(f2.score, f1.score)
 
     def test_maximum_components(self):
-        f = mk(severity="critical", epss_pct=1.0, kev=True, exploit=True)
+        f = mk(severity="critical", epss_prob=1.0, kev=True, exploit=True)
         bd = compute_score(f, {k: 10 for k in
                               ("asset_criticality", "business_impact", "exposure",
                                "control_effectiveness", "data_sensitivity")}, WEIGHTS)

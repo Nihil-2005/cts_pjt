@@ -1,21 +1,14 @@
-"""Noise filtering with an auditable quarantine bucket.
+"""Noise filtering with auditable quarantine bucket.
 
-The pipeline requires filtering that never silently loses a real finding, so
-this module never deletes: every dropped finding is marked ``quarantined``
-with the exact rule that dropped it.  The metrics report shows the quarantine
-breakdown by rule, proving nothing was lost while still demonstrating noise
-reduction.
-
-Rules (all configurable in config.json):
-  - severity floor: findings at/below a severity (default: info) are dropped
-  - FP patterns  : regex patterns matched against title + description
-  - risk_accept  : explicit (product, cwe, reason) allow-list
+Rules (configurable in config.json):
+  - severity floor: findings at/below a severity are dropped
+  - FP patterns: regex matched against title + description
+  - risk_accept: explicit (product, cwe, reason) allow-list
 """
-from __future__ import annotations
 
+from __future__ import annotations
 import re
 from typing import Dict, List, Optional
-
 from .models import Finding, SEVERITY_LEVELS
 
 
@@ -27,12 +20,9 @@ def _matches_any(text: str, patterns: List[str]) -> Optional[str]:
 
 
 def filter_findings(findings: List[Finding], filter_cfg: Dict, product_cfg: Dict[str, Dict]) -> Dict[str, object]:
-    """Applies filtering to the *unique* findings set.
-
-    Returns {"findings": active + quarantined, "metrics": {...}}.
-    """
+    """Applies filtering to the unique findings set. Returns {findings, metrics}."""
     drop_severity = filter_cfg.get("drop_severity", [])
-    floor = min((SEVERITY_LEVELS.get(s, 0) for s in drop_severity), default=-1)
+    floor = max((SEVERITY_LEVELS.get(s, -1) for s in drop_severity), default=-1)
     fp_patterns = filter_cfg.get("fp_patterns", [])
     risk_accept = filter_cfg.get("risk_accept", [])
     accept_keys = {(str(r.get("product")), str(r.get("cwe", "")).upper()) for r in risk_accept}
@@ -44,15 +34,12 @@ def filter_findings(findings: List[Finding], filter_cfg: Dict, product_cfg: Dict
         if f.status == "quarantined":
             continue
         rule = None
-
-        # 1) risk-accept list (explicit "we know, it's accepted")
         key = (f.product, (f.cwe or "").upper())
+
         if key in accept_keys:
             rule = "risk_accept"
-        # 2) severity floor
         elif f.severity_num <= floor:
-            rule = f"severity<=max({','.join(drop_severity)})"
-        # 3) FP patterns on title/description
+            rule = f"severity in ({','.join(drop_severity)})" if drop_severity else "severity: below configured floor"
         elif _matches_any(f"{f.title} {f.description}", fp_patterns):
             rule = f"fp_pattern:{_matches_any(f'{f.title} {f.description}', fp_patterns)}"
 

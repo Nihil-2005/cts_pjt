@@ -75,10 +75,10 @@ class TestExecutiveBrief(unittest.TestCase):
                     severity="critical", score=95)
         f.kev = True
         stats = {"raw_findings": 100, "unique_findings": 60,
-                 "final_findings": 40, "p1": 3, "p2": 5}
+                 "final_findings": 40}
         brief = _executive_brief([f], stats)
         self.assertIn("100", brief)
-        self.assertIn("P1", brief)
+        self.assertIn("Critical", brief)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

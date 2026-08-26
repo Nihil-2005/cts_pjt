@@ -1,13 +1,7 @@
 #!/usr/bin/env bash
-# ============================================================================
-#  Stage 1: Environment Setup
-#  - Creates Python virtual environment (skips if exists)
-#  - Installs project dependencies (skips if already installed)
-#  - Prompts for API keys (optional)
-#  - Writes .env file
-# ============================================================================
-
+# Stage 1: Setup — venv + deps + API keys
 set -euo pipefail
+export MSYS_NO_PATHCONV=1
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 BLUE='\033[0;34m'; CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
@@ -22,14 +16,29 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="$SCRIPT_DIR/.env"
 VENV_DIR="$SCRIPT_DIR/venv"
 
-# ── Virtual Environment ─────────────────────────────────────────────────────
 header "Step 1/3: Python Virtual Environment"
 
 if [ -d "$VENV_DIR" ]; then
     warn "Virtual environment already exists — reusing"
 else
     info "Creating virtual environment..."
-    python3 -m venv "$VENV_DIR" 2>/dev/null || python -m venv "$VENV_DIR"
+    PYTHON_CMD=""
+    if command -v python >/dev/null 2>&1 && \
+       python -c 'import sys; sys.exit(0 if sys.version_info[0] >= 3 else 1)' 2>/dev/null; then
+        PYTHON_CMD=$(command -v python)
+    elif command -v python3 >/dev/null 2>&1 && \
+         python3 -c 'import sys; sys.exit(0 if sys.version_info[0] >= 3 else 1)' 2>/dev/null; then
+        PYTHON_CMD=$(command -v python3)
+    fi
+    if [ -z "$PYTHON_CMD" ]; then
+        error "Python not found! Install Python 3.8+ first."
+        exit 1
+    fi
+    $PYTHON_CMD --version 2>&1 | grep -q "Python 3" || {
+        error "Python 3 is required (found: $($PYTHON_CMD --version))"
+        exit 1
+    }
+    $PYTHON_CMD -m venv "$VENV_DIR"
     success "Virtual environment created"
 fi
 
@@ -39,12 +48,11 @@ success "Activated virtual environment"
 info "Python: $(python --version)"
 info "pip:    $(pip --version | cut -d' ' -f1-2)"
 
-# ── Install Dependencies ────────────────────────────────────────────────────
 header "Step 2/3: Installing Dependencies"
 
 pip install --upgrade pip --quiet 2>/dev/null
 
-if python -c "import fastapi; import uvicorn; import pandas" 2>/dev/null; then
+if python -c "import fastapi; import uvicorn; import pandas; import slowapi; import defusedxml" 2>/dev/null; then
     warn "Dependencies already installed — skipping"
 else
     info "Installing project dependencies..."
@@ -52,7 +60,6 @@ else
     success "All dependencies installed"
 fi
 
-# Wapiti runs via Docker (vulnlab/wapiti:latest) — no local install needed
 if docker image inspect vulnlab/wapiti:latest &>/dev/null; then
     warn "Wapiti Docker image already present"
 else
@@ -61,7 +68,6 @@ else
 fi
 success "Dependencies ready"
 
-# ── API Keys ────────────────────────────────────────────────────────────────
 header "Step 3/3: API Key Configuration"
 
 EXISTING_GROQ=""; EXISTING_NVD=""; EXISTING_GH_TOKEN=""; EXISTING_GH_REPO=""
@@ -75,31 +81,22 @@ fi
 echo "  All keys are OPTIONAL. Press Enter to skip any."
 echo ""
 
-# Groq
 echo -e "  ${BOLD}Groq API Key${NC} (free AI — console.groq.com)"
-if [ -n "$EXISTING_GROQ" ]; then
-    echo "  Current: ${EXISTING_GROQ:0:8}...${EXISTING_GROQ: -4}"
-fi
+if [ -n "$EXISTING_GROQ" ]; then echo "  Current: ${EXISTING_GROQ:0:8}...${EXISTING_GROQ: -4}"; fi
 read -rp "  Enter key (or Enter to skip): " GROQ_INPUT
 GROQ_KEY="${GROQ_INPUT:-$EXISTING_GROQ}"
 [ -n "$GROQ_KEY" ] && success "Groq configured" || warn "Skipping Groq"
 echo ""
 
-# NVD
 echo -e "  ${BOLD}NVD API Key${NC} (optional — nvd.nist.gov/developers)"
-if [ -n "$EXISTING_NVD" ]; then
-    echo "  Current: ${EXISTING_NVD:0:8}..."
-fi
+if [ -n "$EXISTING_NVD" ]; then echo "  Current: ${EXISTING_NVD:0:8}..."; fi
 read -rp "  Enter key (or Enter to skip): " NVD_INPUT
 NVD_KEY="${NVD_INPUT:-$EXISTING_NVD}"
 [ -n "$NVD_KEY" ] && success "NVD configured" || warn "Skipping NVD"
 echo ""
 
-# GitHub
 echo -e "  ${BOLD}GitHub Token${NC} (optional — auto-create Issues)"
-if [ -n "$EXISTING_GH_TOKEN" ]; then
-    echo "  Current: ${EXISTING_GH_TOKEN:0:8}..."
-fi
+if [ -n "$EXISTING_GH_TOKEN" ]; then echo "  Current: ${EXISTING_GH_TOKEN:0:8}..."; fi
 read -rp "  Enter token (or Enter to skip): " GH_INPUT
 if [ -n "$GH_INPUT" ]; then
     GH_TOKEN="$GH_INPUT"
@@ -116,7 +113,6 @@ else
     [ -n "$GH_TOKEN" ] && info "Keeping existing GitHub token" || warn "Skipping GitHub"
 fi
 
-# Write .env
 cat > "$ENV_FILE" << ENVEOF
 # DevSecOps Pipeline — API Keys
 GROQ_API_KEY=${GROQ_KEY}

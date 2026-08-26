@@ -1,7 +1,7 @@
 """Unit tests for attack path mapping."""
 import unittest
 
-from pipeline.models import Finding, AttackPath
+from pipeline.models import Finding
 from pipeline.attackpath import build_attack_paths, attach_escalation_potential
 
 

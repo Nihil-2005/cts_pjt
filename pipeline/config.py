@@ -1,8 +1,5 @@
-"""Configuration loader.
+"""Configuration loader — driven by a single JSON config."""
 
-The pipeline is driven by a single JSON config.  Every value has a sane default
-so the pipeline runs with a minimal config file.
-"""
 from __future__ import annotations
 
 import json
@@ -34,9 +31,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         ],
         "risk_accept": [],
     },
-    "dedup": {
-        "fuzzy_title": True,
-    },
+    "dedup": {"fuzzy_title": True},
     "enrich": {
         "cache_dir": "intel",
         "use_nvd": True,
@@ -57,11 +52,11 @@ DEFAULT_CONFIG: Dict[str, Any] = {
 DEFAULT_PRODUCT: Dict[str, Any] = {
     "display_name": "",
     "owner": "appsec-team",
-    "asset_criticality": 5,      # 0-10
-    "business_impact": 5,        # 0-10
-    "exposure": 5,               # 0-10 (10 = internet-facing)
-    "control_effectiveness": 3,  # 0-10 (10 = strong controls, reduces score)
-    "data_sensitivity": 5,       # 0-10
+    "asset_criticality": 5,
+    "business_impact": 5,
+    "exposure": 5,
+    "control_effectiveness": 3,
+    "data_sensitivity": 5,
     "url": "",
 }
 
@@ -80,7 +75,6 @@ class Config:
     def __init__(self, data: Dict[str, Any]):
         self.data = deep_merge(DEFAULT_CONFIG, data or {})
 
-    # ------------------------------------------------------------- accessors
     @property
     def products(self) -> Dict[str, Any]:
         return self.data["products"]
@@ -113,7 +107,6 @@ class Config:
     def dedup_cfg(self) -> Dict[str, Any]:
         return self.data["dedup"]
 
-    # ------------------------------------------------------------- helpers
     def product(self, name: str) -> Dict[str, Any]:
         p = dict(DEFAULT_PRODUCT)
         p.update(self.products.get(name, {}))
@@ -121,7 +114,18 @@ class Config:
             p["display_name"] = name.replace("_", " ").title()
         return p
 
-    def sla_for(self, score: float) -> Dict[str, Any]:
+    SEVERITY_SLA = {
+        "critical": {"priority": "Critical", "sla_hours": 24},
+        "high": {"priority": "High", "sla_hours": 72},
+        "medium": {"priority": "Medium", "sla_hours": 168},
+        "low": {"priority": "Low", "sla_hours": 336},
+        "info": {"priority": "Info", "sla_hours": 720},
+    }
+
+    def sla_for(self, score: float, severity: str = "") -> Dict[str, Any]:
+        sev = (severity or "").lower().strip()
+        if sev in self.SEVERITY_SLA:
+            return self.SEVERITY_SLA[sev]
         for band in sorted(self.sla_bands, key=lambda b: -b["min"]):
             if score >= band["min"]:
                 return band
@@ -130,7 +134,6 @@ class Config:
     def product_names(self) -> list:
         return list(self.products.keys())
 
-    # ------------------------------------------------------------- io
     @classmethod
     def load(cls, path: Optional[str] = None) -> "Config":
         if path and os.path.exists(path):
@@ -139,13 +142,12 @@ class Config:
         return cls({})
 
     def save(self, path: str) -> None:
-        """Atomic write: write to temp file then rename for crash safety."""
         dir_name = os.path.dirname(path) or "."
         fd, tmp_path = tempfile.mkstemp(dir=dir_name, suffix=".tmp")
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 json.dump(self.data, fh, indent=2)
-            os.replace(tmp_path, path)  # Atomic on POSIX; near-atomic on Windows
+            os.replace(tmp_path, path)
         except Exception:
             try:
                 os.unlink(tmp_path)

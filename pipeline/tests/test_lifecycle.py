@@ -1,21 +1,18 @@
 """Tests for lifecycle tracking, SLA, cross-run dedup, and engagement model."""
+
 from __future__ import annotations
 
 import os
 import tempfile
-import time
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from pipeline.lifecycle import (
     LifecycleManager,
-    TrackedFinding,
     calculate_sla_deadline,
     is_sla_breached,
     sla_remaining_hours,
-    VALID_STATUSES,
-    STATUS_TRANSITIONS,
 )
 from pipeline.models import Finding
 
@@ -104,14 +101,16 @@ class TestFindingLifecycle:
 
         updated = tmp_db.get_tracked(tracked.finding_id)
         assert updated.status == "accepted"
-        assert len(updated.transitions) == 5  # open → in_progress → fixed → verified → accepted
+        assert (
+            len(updated.transitions) == 5
+        )  # open → in_progress → fixed → verified → accepted
 
     def test_invalid_transition_rejected(self, tmp_db):
         f = _make_finding()
         tracked, _ = tmp_db.upsert_finding(f)
 
-        # Can't go directly from open to fixed
-        assert not tmp_db.transition_status(tracked.finding_id, "fixed")
+        # Can't go directly from open to verified
+        assert not tmp_db.transition_status(tracked.finding_id, "verified")
         assert tmp_db.get_tracked(tracked.finding_id).status == "open"
 
     def test_mark_fixed(self, tmp_db):
@@ -243,7 +242,9 @@ class TestEngagementModel:
 
         # Second run — f2 is gone, f3 is new
         f3 = _make_finding(dedup_key="f3", title="New finding")
-        engagement = tmp_db.record_engagement("2026-08-22T10:00:00", "test_app", [f1, f3])
+        engagement = tmp_db.record_engagement(
+            "2026-08-22T10:00:00", "test_app", [f1, f3]
+        )
 
         assert engagement["new_findings"] == 1  # f3
         assert engagement["unchanged_findings"] == 1  # f1

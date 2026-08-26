@@ -5,7 +5,7 @@ import tempfile
 import unittest
 
 from pipeline.config import Config
-from pipeline.enrich import Enricher, Fetcher
+from pipeline.enrich import Fetcher
 from pipeline.run import run_pipeline
 
 

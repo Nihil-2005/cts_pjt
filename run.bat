@@ -22,6 +22,10 @@ if %errorlevel% equ 0 (
 
 echo.
 echo Dashboard: http://localhost:8000
-echo Login:     admin / admin
+if defined DASHBOARD_PASS (
+    echo Login:     admin / %DASHBOARD_PASS%
+) else (
+    echo Login:     admin / (auto-generated — check terminal output)
+)
 echo.
 pause

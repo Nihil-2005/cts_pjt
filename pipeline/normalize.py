@@ -11,22 +11,30 @@ Supported scanners:
 Each parser maps to a normalized Finding so downstream stages never need to
 know which scanner produced a row.
 """
+
 from __future__ import annotations
 
 import json
 import os
+import re
 from defusedxml import ElementTree as ET
 from typing import Any, Dict, List, Optional
 
 from .models import Finding, normalize_severity
 
+import hashlib
+from pathlib import Path
+
 SCANNER_ALIASES = {
-    "zap": "zap", "owasp zap": "zap", "zaproxy": "zap",
+    "zap": "zap",
+    "owasp zap": "zap",
+    "zaproxy": "zap",
     "nuclei": "nuclei",
     "wapiti": "wapiti",
     "trivy": "trivy",
     "nmap": "nmap",
-    "openvas": "openvas", "gvm": "openvas",
+    "openvas": "openvas",
+    "gvm": "openvas",
 }
 
 
@@ -57,7 +65,9 @@ def parse_zap(data: Dict[str, Any], product: str) -> List[Finding]:
     for site in data.get("site", []) or []:
         site_name = site.get("@name", "") or site.get("name", "")
         for alert in site.get("alerts", []) or []:
-            risk = alert.get("riskdesc") or alert.get("risk") or alert.get("confidence") or ""
+            # riskdesc/risk only — confidence is NOT a severity and must not
+            # be misclassified as one when the risk fields are absent.
+            risk = alert.get("riskdesc") or alert.get("risk") or ""
             sev = normalize_severity(str(risk).split(" ")[0])
             cweid = alert.get("cweid")
             cwe = f"CWE-{cweid}" if str(cweid).isdigit() else None
@@ -68,17 +78,22 @@ def parse_zap(data: Dict[str, Any], product: str) -> List[Finding]:
                     if token.startswith("CVE-") and len(token) > 6:
                         cve = token.strip(".")
                         break
-            out.append(Finding(
-                scanner="zap", product=product,
-                title=_clean(alert.get("name") or alert.get("alert")),
-                severity=sev, cve=cve, cwe=cwe,
-                endpoint=_first(alert.get("url"), site_name),
-                parameter=_clean(alert.get("param")),
-                description=_clean(alert.get("desc")),
-                remediation=_clean(alert.get("solution")),
-                evidence=_clean(alert.get("evidence")),
-                raw=alert,
-            ))
+            out.append(
+                Finding(
+                    scanner="zap",
+                    product=product,
+                    title=_clean(alert.get("name") or alert.get("alert")),
+                    severity=sev,
+                    cve=cve,
+                    cwe=cwe,
+                    endpoint=_first(alert.get("url"), site_name),
+                    parameter=_clean(alert.get("param")),
+                    description=_clean(alert.get("desc")),
+                    remediation=_clean(alert.get("solution")),
+                    evidence=_clean(alert.get("evidence")),
+                    raw=alert,
+                )
+            )
     return out
 
 
@@ -96,18 +111,25 @@ def parse_nuclei(data: Any, product: str) -> List[Finding]:
         cve = cve[0] if isinstance(cve, list) else cve
         cwes = classification.get("cwe-id") or []
         cwe = cwes[0] if isinstance(cwes, list) and cwes else cwes
-        out.append(Finding(
-            scanner="nuclei", product=product,
-            title=_clean(info.get("name") or item.get("template-id")),
-            severity=normalize_severity(info.get("severity")),
-            cve=_clean(cve) or None,
-            cwe=str(cwe) if cwe else None,
-            endpoint=_first(item.get("matched-at"), item.get("url")),
-            description=_clean(info.get("description")),
-            remediation=_clean(" ".join(_listify(info.get("reference")))),
-            evidence=_clean(item.get("matched-at")),
-            raw=item,
-        ))
+        # Ensure CWE IDs are uppercase for cross-scanner dedup
+        cwe_str = str(cwe).strip().upper() if cwe else None
+        if cwe_str and not cwe_str.startswith("CWE-"):
+            cwe_str = f"CWE-{cwe_str}" if cwe_str.isdigit() else cwe_str
+        out.append(
+            Finding(
+                scanner="nuclei",
+                product=product,
+                title=_clean(info.get("name") or item.get("template-id")),
+                severity=normalize_severity(info.get("severity")),
+                cve=_clean(cve) or None,
+                cwe=cwe_str,
+                endpoint=_first(item.get("matched-at"), item.get("url")),
+                description=_clean(info.get("description")),
+                remediation=_clean(" ".join(_listify(info.get("reference")))),
+                evidence=_clean(item.get("matched-at")),
+                raw=item,
+            )
+        )
     return out
 
 
@@ -129,17 +151,24 @@ def parse_wapiti(data: Dict[str, Any], product: str) -> List[Finding]:
                     cwe = str(key).split(":")[0].strip().upper()
                     break
             cve = f.get("cve") or None
-            out.append(Finding(
-                scanner="wapiti", product=product,
-                title=f"{category}: {_clean(f.get('info'))[:120]}" if f.get("info") else category,
-                severity=sev, cve=cve, cwe=cwe,
-                endpoint=_clean(f.get("path")),
-                parameter=_clean(f.get("parameter")),
-                description=_clean(cls.get("desc") or f.get("info")),
-                remediation=_clean(cls.get("sol")),
-                evidence=_clean(f.get("path")),
-                raw=f,
-            ))
+            out.append(
+                Finding(
+                    scanner="wapiti",
+                    product=product,
+                    title=f"{category}: {_clean(f.get('info'))[:120]}"
+                    if f.get("info")
+                    else category,
+                    severity=sev,
+                    cve=cve,
+                    cwe=cwe,
+                    endpoint=_clean(f.get("path")),
+                    parameter=_clean(f.get("parameter")),
+                    description=_clean(cls.get("desc") or f.get("info")),
+                    remediation=_clean(cls.get("sol")),
+                    evidence=_clean(f.get("path")),
+                    raw=f,
+                )
+            )
     return out
 
 
@@ -172,25 +201,32 @@ def parse_trivy(data: Dict[str, Any], product: str) -> List[Finding]:
                 for ref in v.get("References") or []:
                     if "cwe.mitre.org" in str(ref) and "CWE-" in str(ref):
                         idx = str(ref).find("CWE-")
-                        cwe = str(ref)[idx:idx + 9].strip()
+                        cwe = str(ref)[idx : idx + 9].strip()
                         break
             fixed = v.get("FixedVersion") or ""
-            out.append(Finding(
-                scanner="trivy", product=product,
-                title=_clean(v.get("Title") or v.get("VulnerabilityID")),
-                severity=normalize_severity(v.get("Severity")),
-                cve=v.get("VulnerabilityID") or None,
-                cwe=cwe,
-                endpoint=target,
-                description=_clean(v.get("Description")),
-                remediation=(f"Upgrade {v.get('PkgName')} from {v.get('InstalledVersion')} "
-                             f"to {fixed}" if fixed else _clean(v.get("Title"))),
-                evidence=f"{target}: {v.get('PkgName')} {v.get('InstalledVersion')}",
-                raw={"cvss_score": cvss, **v},
-                package=v.get("PkgName"),
-                installed_version=v.get("InstalledVersion"),
-                fixed_version=fixed or None,
-            ))
+            out.append(
+                Finding(
+                    scanner="trivy",
+                    product=product,
+                    title=_clean(v.get("Title") or v.get("VulnerabilityID")),
+                    severity=normalize_severity(v.get("Severity")),
+                    cve=v.get("VulnerabilityID") or None,
+                    cwe=cwe,
+                    endpoint=target,
+                    description=_clean(v.get("Description")),
+                    remediation=(
+                        f"Upgrade {v.get('PkgName')} from {v.get('InstalledVersion')} "
+                        f"to {fixed}"
+                        if fixed
+                        else _clean(v.get("Title"))
+                    ),
+                    evidence=f"{target}: {v.get('PkgName')} {v.get('InstalledVersion')}",
+                    raw={"cvss_score": cvss, **v},
+                    package=v.get("PkgName"),
+                    installed_version=v.get("InstalledVersion"),
+                    fixed_version=fixed or None,
+                )
+            )
     return out
 
 
@@ -198,19 +234,19 @@ def parse_trivy(data: Dict[str, Any], product: str) -> List[Finding]:
 # Nmap (light: open ports -> exposure findings)
 # --------------------------------------------------------------------------
 _NMAP_RISKY_SERVICES: Dict[str, tuple] = {
-    "ftp":           ("CWE-319", "low"),    # cleartext auth
-    "telnet":        ("CWE-319", "low"),    # cleartext
-    "http":          ("CWE-200", "low"),    # plain HTTP = exposure
-    "snmp":          ("CWE-200", "low"),    # information disclosure
-    "rdp":           ("CWE-284", "low"),    # direct admin access
-    "vnc":           ("CWE-284", "low"),
-    "ms-sql-s":      ("CWE-284", "medium"),
-    "mysql":         ("CWE-284", "medium"),
-    "postgresql":    ("CWE-284", "medium"),
-    "mongodb":       ("CWE-284", "medium"),
-    "redis":         ("CWE-284", "medium"),
+    "ftp": ("CWE-319", "low"),  # cleartext auth
+    "telnet": ("CWE-319", "low"),  # cleartext
+    "http": ("CWE-200", "low"),  # plain HTTP = exposure
+    "snmp": ("CWE-200", "low"),  # information disclosure
+    "rdp": ("CWE-284", "low"),  # direct admin access
+    "vnc": ("CWE-284", "low"),
+    "ms-sql-s": ("CWE-284", "medium"),
+    "mysql": ("CWE-284", "medium"),
+    "postgresql": ("CWE-284", "medium"),
+    "mongodb": ("CWE-284", "medium"),
+    "redis": ("CWE-284", "medium"),
     "elasticsearch": ("CWE-284", "medium"),
-    "memcached":     ("CWE-284", "medium"),
+    "memcached": ("CWE-284", "medium"),
 }
 
 
@@ -229,28 +265,136 @@ def parse_nmap_xml(text: str, product: str) -> List[Finding]:
                 continue
             svc = port.find("service")
             svc_name = (svc.get("name", "") if svc is not None else "").lower()
-            portid  = port.get("portid", "")
-            proto   = port.get("protocol", "tcp")
+            portid = port.get("portid", "")
+            proto = port.get("protocol", "tcp")
             cwe, severity = _NMAP_RISKY_SERVICES.get(svc_name, (None, "info"))
             desc = (
                 f"Port {portid}/{proto} ({svc_name or 'unknown'}) is open on {addr}. "
             )
             if cwe:
-                desc += (f"Service '{svc_name}' presents attack surface — "
-                         f"see {cwe} ({severity} risk).")
+                desc += (
+                    f"Service '{svc_name}' presents attack surface — "
+                    f"see {cwe} ({severity} risk)."
+                )
             else:
                 desc += "Adds to external attack surface."
-            out.append(Finding(
-                scanner="nmap", product=product,
-                title=f"Open {proto}/{portid} ({svc_name or 'unknown service'})",
-                severity=severity,
-                cwe=cwe,
-                endpoint=f"{addr}:{portid}",
-                description=desc,
-                evidence=f"{addr}:{portid}/{proto} {svc_name}",
-                raw={"port": portid, "protocol": proto,
-                     "service": svc_name, "host": addr},
-            ))
+            out.append(
+                Finding(
+                    scanner="nmap",
+                    product=product,
+                    title=f"Open {proto}/{portid} ({svc_name or 'unknown service'})",
+                    severity=severity,
+                    cwe=cwe,
+                    endpoint=f"{addr}:{portid}",
+                    description=desc,
+                    evidence=f"{addr}:{portid}/{proto} {svc_name}",
+                    raw={
+                        "port": portid,
+                        "protocol": proto,
+                        "service": svc_name,
+                        "host": addr,
+                    },
+                )
+            )
+            # Parse NSE vuln scripts attached to this port
+            for script in port.findall("script"):
+                sid = script.get("id", "")
+                sout = script.get("output", "")
+                # Skip informational scripts
+                if sid in ("fingerprint-strings", "http-server-header",
+                           "http-enum", "http-methods"):
+                    continue
+                # vulners script has nested <table> elements with CVE data
+                if sid == "vulners":
+                    for table in script.iter("table"):
+                        cve_el = table.find("elem[@key='id']")
+                        cvss_el = table.find("elem[@key='cvss']")
+                        cve_text = cve_el.text if cve_el is not None else ""
+                        cvss_text = cvss_el.text if cvss_el is not None else "0"
+                        if not cve_text or not cve_text.startswith("CVE-"):
+                            continue
+                        try:
+                            cvss_val = float(cvss_text)
+                        except (ValueError, TypeError):
+                            cvss_val = 0.0
+                        v_sev = (
+                            "critical" if cvss_val >= 9.0
+                            else "high" if cvss_val >= 7.0
+                            else "medium" if cvss_val >= 4.0
+                            else "low" if cvss_val > 0.0
+                            else "info"
+                        )
+                        out.append(Finding(
+                            scanner="nmap",
+                            product=product,
+                            title=f"{cve_text} (Apache httpd)",
+                            severity=v_sev,
+                            cve=cve_text,
+                            endpoint=f"{addr}:{portid}",
+                            description=f"Nmap vulners script detected {cve_text} (CVSS {cvss_val}) against {svc_name} on port {portid}.",
+                            evidence=sout[:500],
+                            raw={"nse_script": sid, "port": portid, "host": addr},
+                        ))
+                # http-slowloris-check, http-csrf, http-dombased-xss, etc.
+                elif sid.startswith("http-") and "VULNERABLE" in sout.upper():
+                    # Extract CVE if present
+                    cve_match = None
+                    import re as _re
+                    for tok in sout.split():
+                        if tok.startswith("CVE-"):
+                            cve_match = tok.rstrip(",")
+                            break
+                    v_sev = "high" if "CRITICAL" in sout.upper() else "medium"
+                    out.append(Finding(
+                        scanner="nmap",
+                        product=product,
+                        title=f"NSE: {sid} on {svc_name}:{portid}",
+                        severity=v_sev,
+                        cve=cve_match,
+                        endpoint=f"{addr}:{portid}",
+                        description=sout[:300],
+                        evidence=sout[:500],
+                        raw={"nse_script": sid, "port": portid, "host": addr},
+                    ))
+                # http-csrf (no VULNERABLE flag but has findings)
+                elif sid == "http-csrf" and "Path:" in sout:
+                    out.append(Finding(
+                        scanner="nmap",
+                        product=product,
+                        title=f"Potential CSRF on {svc_name}:{portid}",
+                        severity="medium",
+                        cwe="CWE-352",
+                        endpoint=f"{addr}:{portid}",
+                        description=sout[:300],
+                        evidence=sout[:500],
+                        raw={"nse_script": sid, "port": portid, "host": addr},
+                    ))
+                # http-dombased-xss
+                elif sid == "http-dombased-xss" and "Source:" in sout:
+                    out.append(Finding(
+                        scanner="nmap",
+                        product=product,
+                        title=f"DOM-based XSS on {svc_name}:{portid}",
+                        severity="medium",
+                        cwe="CWE-79",
+                        endpoint=f"{addr}:{portid}",
+                        description=sout[:300],
+                        evidence=sout[:500],
+                        raw={"nse_script": sid, "port": portid, "host": addr},
+                    ))
+                # http-cookie-flags (httponly not set)
+                elif sid == "http-cookie-flags" and "httponly flag not set" in sout.lower():
+                    out.append(Finding(
+                        scanner="nmap",
+                        product=product,
+                        title=f"Cookie without HttpOnly flag on {svc_name}:{portid}",
+                        severity="low",
+                        cwe="CWE-614",
+                        endpoint=f"{addr}:{portid}",
+                        description=sout[:300],
+                        evidence=sout[:500],
+                        raw={"nse_script": sid, "port": portid, "host": addr},
+                    ))
     return out
 
 
@@ -292,17 +436,21 @@ def parse_openvas_xml(text: str, product: str) -> List[Finding]:
                 cwe = ref.get("id")
                 break
         host = result.findtext("host") or ""
-        out.append(Finding(
-            scanner="openvas", product=product,
-            title=name,
-            severity=normalize_severity(sev),
-            cve=cve, cwe=cwe,
-            endpoint=host,
-            description=result.findtext("description") or "",
-            remediation=result.findtext("solution") or "",
-            evidence=f"{host} severity={severity_raw}",
-            raw={"severity": severity_raw, "host": host},
-        ))
+        out.append(
+            Finding(
+                scanner="openvas",
+                product=product,
+                title=name,
+                severity=normalize_severity(sev),
+                cve=cve,
+                cwe=cwe,
+                endpoint=host,
+                description=result.findtext("description") or "",
+                remediation=result.findtext("solution") or "",
+                evidence=f"{host} severity={severity_raw}",
+                raw={"severity": severity_raw, "host": host},
+            )
+        )
     return out
 
 
@@ -345,7 +493,9 @@ def _load_json(path: str) -> Any:
     return results
 
 
-def parse_report_file(path: str, product: str, scanner: Optional[str] = None) -> List[Finding]:
+def parse_report_file(
+    path: str, product: str, scanner: Optional[str] = None
+) -> List[Finding]:
     """Parse a single report file into Findings.
 
     Scanner is inferred from the filename when not provided:
@@ -354,10 +504,16 @@ def parse_report_file(path: str, product: str, scanner: Optional[str] = None) ->
     base = os.path.basename(path)
     if scanner is None:
         stem = base.rsplit(".", 1)[0]
-        for candidate in ("_zap", "_nuclei", "_wapiti", "_trivy", "_nmap", "_openvas"):
-            if candidate in stem:
-                scanner = candidate.lstrip("_")
-                break
+        # Match scanner tokens bounded by underscores/end and take the LAST
+        # match: "<product>_<scanner>.json" works, products containing a
+        # scanner name ("my_zap_app_nuclei") route to their real scanner,
+        # and suffixed files ("app_nuclei_extra") still resolve.
+        matches = re.findall(
+            r"(?:^|_)(zap|nuclei|wapiti|trivy|nmap|openvas)(?=$|[^a-z0-9])",
+            stem.lower(),
+        )
+        if matches:
+            scanner = matches[-1]
         if scanner is None:
             raise ValueError(f"Cannot infer scanner from filename: {base}")
     scanner = SCANNER_ALIASES.get(scanner.lower(), scanner.lower())
@@ -374,39 +530,68 @@ def parse_report_file(path: str, product: str, scanner: Optional[str] = None) ->
     return PARSERS[scanner](data, product)
 
 
-def _product_from_filename(fname: str, product_names: Optional[List[str]] = None) -> str:
+def _product_from_filename(
+    fname: str, product_names: Optional[List[str]] = None
+) -> str:
     """Extract the product from ``<product>_<scanner>.json``.
 
     Product names may themselves contain underscores (e.g. ``juice_shop``),
     so we match against the longest known product prefix first.
+    Also handles the scan-script convention of using container names
+    (``juiceshop``) instead of config product names (``juice_shop``).
     """
     stem = fname.rsplit(".", 1)[0]
     candidates = sorted(product_names or [], key=len, reverse=True)
     for product in candidates:
         if stem == product or stem.startswith(product + "_"):
             return product
+    # Fuzzy match: strip underscores and check prefix
+    # Handles e.g. "juiceshop_nuclei" matching config product "juice_shop"
+    stem_clean = stem.replace("_", "")
+    for product in candidates:
+        product_clean = product.replace("_", "")
+        if stem_clean.startswith(product_clean):
+            return product
     return stem.split("_")[0] or "unknown"
 
 
-def parse_reports_dir(reports_dir: str, product_names: Optional[List[str]] = None) -> List[Finding]:
-    """Parse every report file under ``reports_dir``.
+def parse_reports_dir(
+    reports_dir: str, product_names: Optional[List[str]] = None
+) -> List[Finding]:
+    """Parse every report file under ``reports_dir`` (recursive).
 
     Files are expected as ``<product>_<scanner>.json``.  If ``product_names``
     is given, only those products are parsed (product names may contain
     underscores; the longest prefix match wins).
     """
     findings: List[Finding] = []
-    for fname in sorted(os.listdir(reports_dir)):
-        path = os.path.join(reports_dir, fname)
-        if not os.path.isfile(path):
+    reports_path = Path(reports_dir)
+    # Recursive glob to handle nested artifact directories; a single pass
+    # over all files with extension-based dispatch.
+    for report_file in sorted(reports_path.rglob("*")):
+        if not report_file.is_file():
             continue
-        if not (fname.endswith(".json") or fname.endswith(".xml")):
+        if report_file.suffix.lower() not in (".json", ".xml"):
             continue
+        fname = report_file.name
         product = _product_from_filename(fname, product_names)
         if product_names and product not in product_names:
             continue
         try:
-            findings.extend(parse_report_file(path, product))
-        except Exception as exc:  # keep pipeline resilient to one bad file
+            findings.extend(parse_report_file(str(report_file), product))
+        except Exception as exc:
             print(f"  ! skipping {fname}: {exc}")
+    # Populate dedup_key for stable cross-run identity. Tiered to mirror
+    # LifecycleManager._finding_id so scanner title-drift between versions
+    # does not create phantom "new"/"fixed" findings.
+    for f in findings:
+        if f.cve:
+            raw = f"{f.product}|cve|{f.cve.upper()}"
+        elif f.cwe and f.endpoint:
+            ep = re.sub(r"^https?://", "", str(f.endpoint).strip().lower())
+            raw = f"{f.product}|cwe|{str(f.cwe).upper()}|{ep}"
+        else:
+            norm_title = re.sub(r"[^a-z0-9]+", " ", (f.title or "").lower()).strip()
+            raw = f"{f.product}|title|{norm_title[:80]}"
+        f.dedup_key = hashlib.sha256(raw.encode()).hexdigest()[:16]
     return findings

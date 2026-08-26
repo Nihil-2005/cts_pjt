@@ -1,22 +1,19 @@
-# Core runtime
-pandas>=2.0
-requests>=2.31
-python-dotenv>=1.0
+# Core runtime — pinned for reproducibility
+pandas==2.2.2
+requests==2.32.3
+python-dotenv==1.0.1
 
 # Web server
-fastapi>=0.104.0
-uvicorn[standard]>=0.24.0
-websockets>=12.0
+fastapi==0.128.8
+pydantic==2.12.5
+uvicorn[standard]==0.32.0
+websockets==13.1
 
-# Security fixes
-slowapi>=0.1.9
-bcrypt>=4.1.0
-defusedxml>=0.7.1
+# Security
+slowapi==0.1.10
+defusedxml==0.7.1
 
 # Testing
-pytest>=8.0
-pytest-mock>=3.12
-pytest-cov>=4.1
-
-# Optional: DefectDojo integration
-# defectdojo-api>=1.0
+pytest==8.3.3
+pytest-mock==3.14.0
+pytest-cov==6.0.0

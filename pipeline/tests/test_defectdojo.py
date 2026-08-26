@@ -1,7 +1,6 @@
 """Tests for DefectDojo API client."""
 from __future__ import annotations
 
-import pytest
 
 from pipeline.defectdojo_client import (
     DefectDojoClient,
@@ -27,7 +26,9 @@ def _make_finding(**overrides) -> Finding:
 
 
 class TestDefectDojoClient:
-    def test_not_configured_by_default(self):
+    def test_not_configured_by_default(self, monkeypatch):
+        monkeypatch.delenv("DEFECTDOJO_URL", raising=False)
+        monkeypatch.delenv("DEFECTDOJO_API_KEY", raising=False)
         client = DefectDojoClient()
         assert not client.configured
 
@@ -37,17 +38,23 @@ class TestDefectDojoClient:
         client = DefectDojoClient()
         assert client.configured
 
-    def test_list_products_not_configured(self):
+    def test_list_products_not_configured(self, monkeypatch):
+        monkeypatch.delenv("DEFECTDOJO_URL", raising=False)
+        monkeypatch.delenv("DEFECTDOJO_API_KEY", raising=False)
         client = DefectDojoClient()
         assert client.list_products() == []
 
-    def test_import_not_configured(self):
+    def test_import_not_configured(self, monkeypatch):
+        monkeypatch.delenv("DEFECTDOJO_URL", raising=False)
+        monkeypatch.delenv("DEFECTDOJO_API_KEY", raising=False)
         client = DefectDojoClient()
         findings = [_make_finding()]
         result = client.import_findings(findings, engagement_id=1)
         assert result["configured"] is False
 
-    def test_connection_not_configured(self):
+    def test_connection_not_configured(self, monkeypatch):
+        monkeypatch.delenv("DEFECTDOJO_URL", raising=False)
+        monkeypatch.delenv("DEFECTDOJO_API_KEY", raising=False)
         client = DefectDojoClient()
         result = client.test_connection()
         assert result["configured"] is False
@@ -60,17 +67,23 @@ class TestDefectDojoClient:
         assert DefectDojoClient._parse_cwe("") is None
         assert DefectDojoClient._parse_cwe("invalid") is None
 
-    def test_get_or_create_product_not_configured(self):
+    def test_get_or_create_product_not_configured(self, monkeypatch):
+        monkeypatch.delenv("DEFECTDOJO_URL", raising=False)
+        monkeypatch.delenv("DEFECTDOJO_API_KEY", raising=False)
         client = DefectDojoClient()
         assert client.get_or_create_product("test") is None
 
-    def test_create_engagement_not_configured(self):
+    def test_create_engagement_not_configured(self, monkeypatch):
+        monkeypatch.delenv("DEFECTDOJO_URL", raising=False)
+        monkeypatch.delenv("DEFECTDOJO_API_KEY", raising=False)
         client = DefectDojoClient()
         assert client.create_engagement("test", product_id=1) is None
 
 
 class TestImportToDefectdojo:
-    def test_not_configured(self):
+    def test_not_configured(self, monkeypatch):
+        monkeypatch.delenv("DEFECTDOJO_URL", raising=False)
+        monkeypatch.delenv("DEFECTDOJO_API_KEY", raising=False)
         findings = [_make_finding()]
         result = import_to_defectdojo(findings, "test_product")
         assert result["configured"] is False

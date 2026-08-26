@@ -9,6 +9,7 @@ All libraries loaded from cdnjs.cloudflare.com (works offline after
 first browser cache).  Data is injected as a single JSON constant so
 the file is fully self-contained after generation.
 """
+
 from __future__ import annotations
 
 import html as html_lib
@@ -21,6 +22,7 @@ from .models import Finding, RunSummary
 
 # ─────────────────────── data serialisation ──────────────────────────────────
 
+
 def _esc(s: Any) -> str:
     return html_lib.escape(str(s) if s is not None else "")
 
@@ -29,41 +31,43 @@ def _serialize_findings(ranked: List[Finding]) -> List[Dict]:
     out = []
     for i, f in enumerate(ranked):
         sb = f.score_breakdown or {}
-        out.append({
-            "rank":                i + 1,
-            "score":               f.score or 0,
-            "priority":            f.priority or "",
-            "sla_hours":           f.sla_hours or 0,
-            "owner":               f.owner or "",
-            "product":             f.product or "",
-            "scanner":             f.scanner or "",
-            "title":               f.title or "",
-            "severity":            f.severity or "",
-            "cve":                 f.cve or "",
-            "cwe":                 f.cwe or "",
-            "endpoint":            f.endpoint or "",
-            "parameter":           f.parameter or "",
-            "epss_score":          round(float(f.epss_score or 0), 4),
-            "epss_percentile":     round(float(f.epss_percentile or 0), 4),
-            "epss_trend":          round(float(f.epss_trend or 0), 4),
-            "kev":                 bool(f.kev),
-            "kev_date":            f.kev_date or "",
-            "exploit_available":   bool(f.exploit_available),
-            "exploit_source":      f.exploit_source or "",
-            "escalation_potential": round(float(f.escalation_potential or 0), 3),
-            "description":         (f.description or "")[:400],
-            "package":             f.package or "",
-            "fixed_version":       f.fixed_version or "",
-            "ai_fp_probability":   sb.get("ai_fp_probability", ""),
-            "ai_fp_reason":        sb.get("ai_fp_reason", ""),
-            "ai_remediation":      sb.get("ai_remediation", ""),
-            "score_components":    sb.get("components", {}),
-            "score_drivers":       sb.get("drivers", []),
-            "remediation":         [
-                {"kind": s.get("kind", ""), "text": (s.get("text", ""))[:250]}
-                for s in (f.remediation_suggestions or [])[:5]
-            ],
-        })
+        out.append(
+            {
+                "rank": i + 1,
+                "score": f.score or 0,
+                "priority": f.priority or "",
+                "sla_hours": f.sla_hours or 0,
+                "owner": f.owner or "",
+                "product": f.product or "",
+                "scanner": f.scanner or "",
+                "title": f.title or "",
+                "severity": f.severity or "",
+                "cve": f.cve or "",
+                "cwe": f.cwe or "",
+                "endpoint": f.endpoint or "",
+                "parameter": f.parameter or "",
+                "epss_score": round(float(f.epss_score or 0), 4),
+                "epss_percentile": round(float(f.epss_percentile or 0), 4),
+                "epss_trend": round(float(f.epss_trend or 0), 4),
+                "kev": bool(f.kev),
+                "kev_date": f.kev_date or "",
+                "exploit_available": bool(f.exploit_available),
+                "exploit_source": f.exploit_source or "",
+                "escalation_potential": round(float(f.escalation_potential or 0), 3),
+                "description": (f.description or "")[:400],
+                "package": f.package or "",
+                "fixed_version": f.fixed_version or "",
+                "ai_fp_probability": sb.get("ai_fp_probability", ""),
+                "ai_fp_reason": sb.get("ai_fp_reason", ""),
+                "ai_remediation": sb.get("ai_remediation", ""),
+                "score_components": sb.get("components", {}),
+                "score_drivers": sb.get("drivers", []),
+                "remediation": [
+                    {"kind": s.get("kind", ""), "text": (s.get("text", ""))[:250]}
+                    for s in (f.remediation_suggestions or [])[:5]
+                ],
+            }
+        )
     return out
 
 
@@ -72,12 +76,13 @@ def _serialize_quarantine(findings: List[Finding]) -> List[Dict]:
         {
             "product": f.product or "",
             "scanner": f.scanner or "",
-            "title":   (f.title or "")[:80],
+            "title": (f.title or "")[:80],
             "severity": f.severity or "",
-            "reason":  f.quarantine_reason or "",
-            "cve":     f.cve or "",
+            "reason": f.quarantine_reason or "",
+            "cve": f.cve or "",
         }
-        for f in findings if f.status == "quarantined"
+        for f in findings
+        if f.status == "quarantined"
     ]
 
 
@@ -91,8 +96,8 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 <title>Risk Intelligence Dashboard</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js" defer></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js" defer></script>
+<script src="dash-static/chart.umd.min.js" defer></script>
+<script src="dash-static/d3.min.js" defer></script>
 <style>
 /* ═══════════════════ 1. DESIGN TOKENS ═══════════════════ */
 :root{
@@ -340,14 +345,14 @@ select.input option{background:var(--bg-elevated);color:var(--text-primary)}
 <main id="page-findings" class="page" role="tabpanel" aria-labelledby="tab-findings">
   <div class="filter-row">
     <input id="tbl-search" class="input" placeholder="Search title, CVE, CWE, endpoint...">
-    <select id="f-priority" class="input" style="width:140px"><option value="">All priorities</option></select>
+    <select id="f-priority" class="input" style="width:140px"><option value="">All risk levels</option></select>
     <select id="f-severity" class="input" style="width:140px"><option value="">All severities</option></select>
     <select id="f-scanner" class="input" style="width:140px"><option value="">All scanners</option></select>
-    <select id="f-kev" class="input" style="width:140px"><option value="">KEV filter</option><option value="kev">KEV only</option><option value="exploit">Exploit available</option></select>
+    <select id="f-kev" class="input" style="width:140px"><option value="">Threat intel</option><option value="kev">KEV only</option><option value="exploit">Exploit available</option></select>
     <button class="btn btn-secondary btn-sm" onclick="App.findings.exportCSV()">Export CSV</button>
     <span class="result-count" id="result-badge">-- findings</span>
   </div>
-  <div class="table-wrap"><table class="data-table"><thead id="tbl-head"><tr><th style="width:40px">#</th><th style="width:90px">Score</th><th style="width:80px">Priority</th><th style="width:80px">Severity</th><th>Title</th><th style="width:100px">Product</th><th style="width:80px">Scanner</th><th style="width:130px">CVE</th><th style="width:50px">KEV</th><th style="width:60px">EPSS</th><th style="width:50px">SLA</th></tr></thead><tbody id="tbl-body"></tbody></table></div>
+  <div class="table-wrap"><table class="data-table"><thead id="tbl-head"><tr><th style="width:40px">#</th><th style="width:90px">Score</th><th style="width:80px">Priority</th><th style="width:80px">Severity</th><th>Title</th><th style="width:100px">Product</th><th style="width:80px">Scanner</th><th style="width:130px">CVE</th><th style="width:50px">KEV</th><th style="width:60px">Exploit</th><th style="width:60px">EPSS</th><th style="width:70px">SLA (hrs)</th></tr></thead><tbody id="tbl-body"></tbody></table></div>
 </main>
 
 <!-- ═══════════════════ ATTACK PATHS ═══════════════════ -->
@@ -363,7 +368,7 @@ select.input option{background:var(--bg-elevated);color:var(--text-primary)}
       <select id="ap-product" class="input" style="width:180px"></select>
       <button class="btn btn-secondary btn-sm" onclick="App.attackPaths.reset()">Reset zoom</button>
     </div>
-    <div id="ap-container"><svg id="ap-svg" width="100%" height="480"></svg><div class="ap-tooltip" id="ap-tooltip"></div></div>
+    <div id="ap-container" style="position:relative"><div style="display:flex;gap:var(--space-4);margin-bottom:var(--space-3)"><div style="flex:1;min-width:0"><svg id="ap-svg" width="100%" height="480"></svg><div class="ap-tooltip" id="ap-tooltip"></div></div><div id="ap-detail-panel" style="width:320px;min-height:480px;background:var(--bg-surface);border:1px solid var(--border-subtle);border-radius:8px;padding:var(--space-4);overflow-y:auto;display:none"><div style="font-size:var(--text-xs);font-weight:600;color:var(--text-secondary)">Click a node or link for details</div></div></div></div>
   </div>
 </main>
 
@@ -382,9 +387,9 @@ select.input option{background:var(--bg-elevated);color:var(--text-primary)}
   <div class="card">
     <div class="card-header">Add New Product</div>
     <div class="form-grid">
-      <div><label class="form-label">Product ID</label><input id="ap-id" class="input" placeholder="my_app"></div>
-      <div><label class="form-label">Display Name</label><input id="ap-name" class="input" placeholder="My App"></div>
-      <div><label class="form-label">Target URL</label><input id="ap-url" class="input" placeholder="https://myapp.com"></div>
+      <div><label class="form-label">Product ID</label><input id="ap-id" class="input" placeholder="my_app" autocomplete="off"></div>
+      <div><label class="form-label">Display Name</label><input id="ap-name" class="input" placeholder="My App" autocomplete="off"></div>
+      <div><label class="form-label">Target URL</label><input id="ap-url" class="input" placeholder="https://myapp.com" autocomplete="off"></div>
       <div><label class="form-label">GitHub Repo</label><input id="ap-repo" class="input" placeholder="org/repo"></div>
       <div><label class="form-label">Owner</label><input id="ap-owner" class="input" placeholder="appsec-team"></div>
       <div><label class="form-label">Criticality (1-10)</label><input id="ap-crit" type="number" min="1" max="10" value="5" class="input"></div>
@@ -426,9 +431,19 @@ select.input option{background:var(--bg-elevated);color:var(--text-primary)}
 <!-- ═══════════════════ LIFECYCLE ═══════════════════ -->
 <main id="page-lifecycle" class="page" role="tabpanel" aria-labelledby="tab-lifecycle">
   <div class="lc-summary" id="lc-summary"></div>
+  <div class="filter-row" style="margin-bottom:var(--space-4)">
+    <select id="lc-f-status" class="input" style="width:140px"><option value="">All statuses</option></select>
+    <select id="lc-f-severity" class="input" style="width:140px"><option value="">All severities</option></select>
+    <select id="lc-f-product" class="input" style="width:140px"><option value="">All products</option></select>
+    <select id="lc-f-sla" class="input" style="width:140px"><option value="">All SLA</option><option value="breached">Breached only</option><option value="ok">On track</option></select>
+  </div>
   <div class="card mb-6">
     <div class="card-header">Vulnerability Lifecycle</div>
     <div id="lc-table-wrap"></div>
+  </div>
+  <div class="card" id="lc-detail-card" style="display:none">
+    <div class="card-header">Finding Details <button class="btn btn-secondary btn-sm" style="margin-left:auto" onclick="document.getElementById('lc-detail-card').style.display='none'">Close</button></div>
+    <div id="lc-detail-content"></div>
   </div>
   <div class="card">
     <div class="card-header">SLA Breach Monitor</div>
@@ -443,23 +458,40 @@ select.input option{background:var(--bg-elevated);color:var(--text-primary)}
     <div class="card"><div class="card-header">Findings per Scanner</div><div style="height:200px"><canvas id="c-dedup-scanner" aria-label="Findings per scanner chart"></canvas></div></div>
     <div class="card"><div class="card-header">Top Overlaps</div><div style="height:200px"><canvas id="c-dedup-overlap" aria-label="Cross-scanner overlap chart"></canvas></div></div>
   </div>
+  <div class="grid-2 mb-6">
+    <div class="card">
+      <div class="card-header">Deduplication Breakdown</div>
+      <div id="dedup-breakdown"></div>
+    </div>
+    <div class="card">
+      <div class="card-header">Quarantine Rules</div>
+      <div id="dedup-quarantine"></div>
+    </div>
+  </div>
   <div class="card">
     <div class="card-header">Overlap Details</div>
     <div id="dedup-overlap-table"></div>
+  </div>
+  <div class="card" style="margin-top:var(--space-4)">
+    <div class="card-header">Removed Findings <span id="removed-count" class="badge" style="font-size:10px;margin-left:8px"></span></div>
+    <div class="filter-row" style="margin-bottom:var(--space-3)"><input class="input" id="removed-search" placeholder="Search removed findings..." style="max-width:400px"><select class="input" id="removed-pass" style="width:140px"><option value="">All passes</option><option value="cve">CVE match</option><option value="endpoint">Endpoint+CWE</option><option value="title">Fuzzy title</option><option value="quarantine">Quarantined</option></select><span id="removed-showing" class="dimmed" style="font-size:var(--text-xs)"></span></div>
+    <div id="removed-findings-list" style="max-height:500px;overflow-y:auto"></div>
+    <div id="removed-pagination" style="display:flex;justify-content:center;gap:var(--space-2);margin-top:var(--space-3)"></div>
   </div>
 </main>
 
 <!-- ═══════════════════ INTEGRATIONS ═══════════════════ -->
 <main id="page-integrations" class="page" role="tabpanel" aria-labelledby="tab-integrations">
   <div class="grid-2 mb-6">
-    <div class="card"><div class="card-header">AI Enrichment</div><div class="integration-fields"><div><label class="form-label">Groq API Key</label><input id="ak-groq" class="input" type="password" placeholder="gsk_..."></div><div><label class="form-label">NVD API Key</label><input id="ak-nvd" class="input" type="password" placeholder="Optional"></div></div></div>
-    <div class="card"><div class="card-header">GitHub</div><div class="integration-fields"><div><label class="form-label">Token</label><input id="ak-github" class="input" type="password" placeholder="ghp_..."></div></div></div>
-    <div class="card"><div class="card-header">Jira</div><div class="integration-fields"><div><label class="form-label">URL</label><input id="ak-jira-url" class="input" placeholder="https://org.atlassian.net"></div><div><label class="form-label">Username</label><input id="ak-jira-user" class="input" placeholder="user@company.com"></div><div><label class="form-label">Token</label><input id="ak-jira-token" class="input" type="password" placeholder="ATATT..."></div><div><label class="form-label">Project Key</label><input id="ak-jira-project" class="input" placeholder="SEC"></div></div></div>
-    <div class="card"><div class="card-header">DefectDojo</div><div class="integration-fields"><div><label class="form-label">URL</label><input id="ak-dd-url" class="input" placeholder="http://localhost:8080"></div><div><label class="form-label">API Key</label><input id="ak-dd-key" class="input" type="password"></div></div></div>
+    <div class="card"><div class="card-header">AI Enrichment <span id="status-ai" class="badge" style="font-size:10px;margin-left:8px"></span></div><div class="integration-fields"><div><label class="form-label">Groq API Key</label><input id="ak-groq" class="input" type="password" placeholder="gsk_..." autocomplete="new-password"></div><div><label class="form-label">NVD API Key</label><input id="ak-nvd" class="input" type="password" placeholder="Optional" autocomplete="new-password"></div></div></div>
+    <div class="card"><div class="card-header">GitHub <span id="status-github" class="badge" style="font-size:10px;margin-left:8px"></span></div><div class="integration-fields"><div><label class="form-label">Token</label><input id="ak-github" class="input" type="password" placeholder="ghp_..." autocomplete="new-password"></div></div></div>
+    <div class="card"><div class="card-header">Jira <span id="status-jira" class="badge" style="font-size:10px;margin-left:8px"></span></div><div class="integration-fields"><div><label class="form-label">URL</label><input id="ak-jira-url" class="input" placeholder="https://org.atlassian.net"></div><div><label class="form-label">Username</label><input id="ak-jira-user" class="input" placeholder="user@company.com"></div><div><label class="form-label">Token</label><input id="ak-jira-token" class="input" type="password" placeholder="ATATT..." autocomplete="new-password"></div><div><label class="form-label">Project Key</label><input id="ak-jira-project" class="input" placeholder="SEC"></div></div></div>
+    <div class="card"><div class="card-header">DefectDojo <span id="status-dd" class="badge" style="font-size:10px;margin-left:8px"></span></div><div class="integration-fields"><div><label class="form-label">URL</label><input id="ak-dd-url" class="input" placeholder="http://localhost:8081"></div><div><label class="form-label">API Key</label><input id="ak-dd-key" class="input" type="password" autocomplete="new-password"></div></div></div>
   </div>
-  <div style="margin-bottom:var(--space-6)">
+  <div style="margin-bottom:var(--space-6);display:flex;align-items:center;gap:var(--space-3)">
     <button class="btn btn-primary" onclick="App.integrations.saveKeys()">Save All Keys</button>
-    <span id="apikey-status" style="font-size:var(--text-xs);margin-left:var(--space-2)"></span>
+    <label style="display:flex;align-items:center;gap:6px;font-size:var(--text-xs);color:var(--text-secondary);cursor:pointer"><input type="checkbox" id="ak-overwrite" checked> Overwrite existing keys</label>
+    <span id="apikey-status" style="font-size:var(--text-xs)"></span>
   </div>
   <div class="grid-2 mb-6">
     <div class="card"><div class="card-header">Jira Integration</div><div style="display:flex;gap:var(--space-2);margin-bottom:var(--space-3)"><button class="btn btn-secondary btn-sm" onclick="App.integrations.testJira()">Test Connection</button><button class="btn btn-primary btn-sm" onclick="App.integrations.createJira()">Create Issues</button></div><div id="jira-status"></div></div>
@@ -476,7 +508,7 @@ select.input option{background:var(--bg-elevated);color:var(--text-primary)}
 </main>
 
 <!-- ═══════════════════ DATA ═══════════════════ -->
-<script>const DASH=__DASH_JSON__;</script>
+<script type="application/json" id="dash-data">__DASH_JSON__</script>
 <script>
 /* ═══════════════════════ APP ═══════════════════════ */
 const OP={high:'.8',med:'.7',low:'.5',dim:'.4'};
@@ -498,6 +530,7 @@ const TABLE_COLUMNS=[
   {k:'scanner',label:'Scanner',w:'80px',sortable:true,dir:1},
   {k:'cve',label:'CVE',w:'130px',sortable:false},
   {k:'kev',label:'KEV',w:'50px',sortable:true,dir:-1},
+  {k:'exploit_available',label:'Exploit',w:'60px',sortable:true,dir:-1},
   {k:'epss_score',label:'EPSS',w:'60px',sortable:true,dir:-1},
   {k:'sla_hours',label:'SLA',w:'50px',sortable:true,dir:-1}
 ];
@@ -507,20 +540,24 @@ const App={
   hasChart:false,
 
   init(){
-    this.data=DASH;
+    this.data=JSON.parse(document.getElementById('dash-data').textContent);
     var self=this;
-    var coreFns=[function(){self.buildHeader();},function(){self.initTabs();},function(){self.initKeyboard();},function(){self.initCharts();}];
+    var coreFns=[function(){self.buildHeader();},function(){self.initTabs();},function(){self.initKeyboard();}];
     coreFns.forEach(function(fn,i){try{fn();}catch(e){if(typeof console!=='undefined'&&console.error)console.error('init['+i+']:',e);}});
     var pageFns=[
       {n:'overview',fn:function(){self.overview.init();}},
       {n:'findings',fn:function(){self.findings.init();}},
       {n:'quarantine',fn:function(){self.buildQuarantine();}},
-      {n:'products',fn:function(){self.buildProducts();}},
+      {n:'products',fn:function(){self.products.init();}},
       {n:'lifecycle',fn:function(){self.lifecycle.init();}},
-      {n:'dedup',fn:function(){self.dedup.init();}}
+      {n:'dedup',fn:function(){self.dedup.init();}},
+      {n:'integrations',fn:function(){self.integrations.loadKeys();}}
     ];
     pageFns.forEach(function(p){try{p.fn();}catch(e){if(typeof console!=='undefined'&&console.error)console.error(p.n+':',e);}});
-    if(location.hash){try{this.switchTab(location.hash.slice(1));}catch(e){if(typeof console!=='undefined'&&console.error)console.error('switchTab:',e);}}
+    // Init charts AFTER page modules so data is populated
+    try{self.initCharts();}catch(e){if(typeof console!=='undefined'&&console.error)console.error('initCharts:',e);}
+    var initPage=location.pathname.replace(/^\//,'').replace(/\//g,'').split('?')[0]||'overview';
+    if(initPage!=='overview'&&document.querySelector('.tab-btn[data-page="'+initPage+'"]')){try{this.switchTab(initPage,false);}catch(e){if(typeof console!=='undefined'&&console.error)console.error('switchTab:',e);}}
     // Executive brief
     var brief=App.data.executive_brief;
     if(brief){try{var card=App.$('exec-brief-card');var text=App.$('exec-brief-text');if(card&&text){card.style.display='block';text.textContent=brief;}}catch(e){if(typeof console!=='undefined'&&console.error)console.error('brief:',e);}}
@@ -531,7 +568,7 @@ const App={
   tooltipText(s){return(s||'').toString().replace(/&/g,'&amp;').replace(/"/g,'&quot;');},
   scoreColor(v){return v>=80?'#EF4444':v>=60?'#F59E0B':v>=40?'#EAB308':'#22C55E';},
   scoreClass(v){return v>=80?'text-critical':v>=60?'':v>=40?'':'text-low';},
-  priClass(p){return({P1:'b-p1',P2:'b-p2',P3:'b-p3',P4:'b-p4'}[p]||'b-p4');},
+  priClass(p){return({Critical:'b-p1',High:'b-p2',Medium:'b-p3',Low:'b-p4'}[p]||'b-p4');},
   sevClass(s){return({critical:'b-critical',high:'b-high',medium:'b-medium',low:'b-low',info:'b-info-sev'}[s]||'b-info-sev');},
   pct(n){return n!=null?(n*100).toFixed(1)+'%':'-';},
   gridColor:'rgba(255,255,255,0.03)',
@@ -562,8 +599,8 @@ const App={
     if(!meta)return;
     var parts=[S.run_date?S.run_date.substring(0,16):'-'];
     if(S.products)parts.push(S.products.length+' products');
-    if(S.p1>0)parts.push('<span class="p1-count">'+S.p1+' P1</span>');
-    if(S.p2>0)parts.push('<span class="p2-count">'+S.p2+' P2</span>');
+    if(S.p1>0)parts.push('<span class="p1-count">'+S.p1+' Critical</span>');
+    if(S.p2>0)parts.push('<span class="p2-count">'+S.p2+' High</span>');
     meta.innerHTML=parts.join(' \u00b7 ');
     var tf=this.$('tc-findings');if(tf)tf.textContent='('+S.final_findings+')';
     var tq=this.$('tc-quarantine');if(tq)tq.textContent='('+S.quarantined+')';
@@ -574,11 +611,12 @@ const App={
     document.querySelectorAll('.tab-btn').forEach(function(btn){
       btn.addEventListener('click',function(){self.switchTab(btn.dataset.page);});
     });
-    window.addEventListener('hashchange',function(){
-      var h=location.hash.slice(1);if(h&&h!==self.state.currentTab&&document.querySelector('.tab-btn[data-page="'+h+'"]'))self.switchTab(h);
+    window.addEventListener('popstate',function(){
+      var h=location.pathname.replace(/^\//,'').replace(/\//g,'').split('?')[0]||'overview';
+      if(h&&h!==self.state.currentTab&&document.querySelector('.tab-btn[data-page="'+h+'"]'))self.switchTab(h,false);
     });
   },
-  switchTab(page){
+  switchTab(page,replaceState){
     var self=this;
     document.querySelectorAll('.tab-btn').forEach(function(b){
       b.classList.toggle('active',b.dataset.page===page);
@@ -587,7 +625,10 @@ const App={
     document.querySelectorAll('.page').forEach(function(p){p.classList.remove('active');});
     var pg=self.$('page-'+page);if(pg)pg.classList.add('active');
     self.state.currentTab=page;
-    if(location.hash.slice(1)!==page){history.replaceState(null,null,'#'+page);}
+    if(replaceState!==false){
+      var newPath='/'==page?'/':('/'+page);
+      if(location.pathname!==newPath){history.replaceState(null,null,newPath);}
+    }
     if(page==='attackpaths'&&!self.state.apInited){self.attackPaths.init();self.state.apInited=true;}
     if(page==='control'){self.control.loadStatus();self.control.connectWS();self.control.loadJobs();}
   },
@@ -624,7 +665,7 @@ const App={
         {v:S.unique_findings,l:'After Dedup',sub:S.dedup_pct+'% removed',color:''},
         {v:S.quarantined,l:'Quarantined',sub:'False positives / accepted',color:''},
         {v:S.final_findings,l:'Active Findings',sub:'Prioritized & scored',color:''},
-        {v:S.p1+S.p2,l:'Critical + High',sub:S.p1+' P1 \u00b7 '+S.p2+' P2',color:S.p1>0?'text-critical':''},
+        {v:S.p1+S.p2,l:'Critical + High',sub:S.p1+' Critical \u00b7 '+S.p2+' High',color:S.p1>0?'text-critical':''},
         {v:S.avg_score,l:'Avg Risk Score',sub:'Top: '+S.top_score,color:''},
         {v:noiseRm,l:'Noise Reduction',sub:'Raw to final',color:'text-low',isPercent:true}
       ];
@@ -669,7 +710,7 @@ const App={
         var hBarOpts={indexAxis:'y',scales:{x:{grid:{color:App.gridColor},ticks:{font:{size:10},color:'#9CA3AF'}},y:{grid:{display:false},ticks:{font:{size:10},color:'#9CA3AF'}}},plugins:{legend:{display:false}}};
         // Priority horizontal bar
         var pe=App.$('c-priority');
-        if(pe)new Chart(pe,{type:'bar',data:{labels:['P1 Critical','P2 High','P3 Medium','P4 Low'],datasets:[{data:[S.p1,S.p2,S.p3,S.p4],backgroundColor:[CHART_COLORS.critical,CHART_COLORS.high,CHART_COLORS.medium,CHART_COLORS.info],borderWidth:0,borderRadius:4}]},options:hBarOpts});
+        if(pe)new Chart(pe,{type:'bar',data:{labels:['Critical','High','Medium','Low'],datasets:[{data:[S.p1,S.p2,S.p3,S.p4],backgroundColor:[CHART_COLORS.critical,CHART_COLORS.high,CHART_COLORS.medium,CHART_COLORS.info],borderWidth:0,borderRadius:4}]},options:hBarOpts});
         // Severity horizontal bar
         var se=App.$('c-severity');
         if(se){
@@ -797,7 +838,7 @@ const App={
     render(){
       var rows=this.getFiltered();
       var rb=App.$('result-badge');if(rb)rb.textContent=rows.length+' of '+App.data.findings.length+' findings';
-      var tb=App.$('tbl-body');if(tb)tb.innerHTML=rows.map(this.renderRow).join('');
+      var tb=App.$('tbl-body');if(tb)tb.innerHTML=rows.map(function(f){return App.findings.renderRow(f);}).join('');
     },
     renderRow(f){
       var sc=App.scoreColor(f.score);
@@ -815,28 +856,67 @@ const App={
         '<td class="dimmed" style="font-size:11px">'+App.esc(f.scanner)+'</td>'+
         '<td>'+(f.cve?'<a class="cve-link" href="https://nvd.nist.gov/vuln/detail/'+App.esc(f.cve)+'" target="_blank" onclick="event.stopPropagation()">'+App.esc(f.cve)+'</a>':'<span class="dimmed">\u2014</span>')+'</td>'+
         '<td>'+(f.kev?'<span style="color:var(--risk-critical);font-weight:600;font-size:11px">KEV</span>':'<span class="dimmed">\u2014</span>')+'</td>'+
+        '<td>'+(f.exploit_available?'<span style="color:var(--risk-high);font-weight:600;font-size:11px">\u2714</span>':'<span class="dimmed">\u2014</span>')+'</td>'+
         '<td class="mono" style="font-size:11px;color:var(--text-secondary)">'+epssStr+'</td>'+
-        '<td class="mono dimmed" style="font-size:11px">'+f.sla_hours+'h</td>'+
-        '</tr><tr class="detail-row" id="detail-'+f.rank+'"><td colspan="11">'+detailHtml+'</td></tr>';
+        '<td class="mono dimmed" style="font-size:11px" title="Remediation deadline: '+f.priority+' findings must be fixed within '+f.sla_hours+' hours">'+f.sla_hours+'h</td>'+
+        '</tr><tr class="detail-row" id="detail-'+f.rank+'"><td colspan="12">'+detailHtml+'</td></tr>';
     },
     renderDetail(f){
       var sb=f.score_components||{};
-      var comps=Object.entries(sb).map(function(kv){return '<span style="margin-right:10px"><span class="dimmed">'+kv[0]+':</span> <b>'+kv[1]+'</b></span>';}).join('');
-      var drivers=(f.score_drivers||[]).map(function(d){return '<span style="margin-right:8px;color:var(--risk-medium)">\u2022 '+App.esc(d)+'</span>';}).join('');
+      var comps=Object.entries(sb).map(function(kv){return '<div style="display:flex;justify-content:space-between;padding:2px 0"><span style="color:var(--text-tertiary)">'+kv[0]+'</span><b style="color:var(--text-primary)">'+kv[1]+'</b></div>';}).join('');
+      var drivers=(f.score_drivers||[]).map(function(d){return '<div style="color:var(--risk-medium);font-size:var(--text-xs);margin-bottom:2px">\u2022 '+App.esc(d)+'</div>';}).join('');
       var rems=(f.remediation||[]).map(function(r){return '<li><span class="rem-kind">'+App.esc(r.kind)+'</span> '+App.esc(r.text)+'</li>';}).join('');
       var aiRem=f.ai_remediation?'<div class="ai-box"><div class="ai-label">AI Remediation</div><div class="ai-content">'+App.esc(f.ai_remediation)+'</div></div>':'';
-      return '<div class="detail-panel"><div class="detail-section"><div class="detail-section-title">Finding Details</div>'+
+      // Raw enrichment data helpers
+      var epssRaw=f.epss_score!=null?f.epss_score.toFixed(4):'N/A';
+      var epssPct=f.epss_score!=null?(f.epss_score*100).toFixed(2)+'%':'N/A';
+      var epssPctile=f.epss_percentile!=null?(f.epss_percentile*100).toFixed(2)+'%':'N/A';
+      var epssTrend=f.epss_trend!=null?(f.epss_trend>0?'+':'')+f.epss_trend.toFixed(4):'';
+      var epssTrendHtml=epssTrend?'<span style="color:'+(parseFloat(epssTrend)>0?'var(--risk-critical)':'var(--risk-low)')+';font-size:10px;margin-left:4px">('+epssTrend+'/7d)</span>':'';
+      var kevBadge=f.kev?'<span style="color:var(--risk-critical);font-weight:700">YES</span> <span style="color:var(--text-tertiary);font-size:10px">added '+App.esc(f.kev_date||'')+'</span>':'<span style="color:var(--text-tertiary)">No (not in CISA KEV)</span>';
+      var exploitBadge=f.exploit_available?'<span style="color:var(--risk-high);font-weight:700">YES</span> <span style="color:var(--text-tertiary);font-size:10px">('+App.esc(f.exploit_source||'')+')</span>':'<span style="color:var(--text-tertiary)">No</span>';
+      var cvssVal=f.nvd_cvss!=null?f.nvd_cvss.toFixed(1)+' (NVD)':'N/A (severity approx: '+(sb.cvss||0)+'pts)';
+      var cweLink=f.cwe?'<a href="https://cwe.mitre.org/data/definitions/'+App.esc(f.cwe.replace('CWE-',''))+'.html" target="_blank" style="color:var(--infoBar)">'+App.esc(f.cwe)+'</a>':'N/A';
+      var pkgInfo=f.package?'<div class="detail-row-item"><span class="detail-key">Package</span><span class="detail-val">'+App.esc(f.package)+(f.fixed_version?' <span style="color:var(--risk-low)">\u2192 '+App.esc(f.fixed_version)+'</span>':' <span style="color:var(--text-tertiary)">(no fix)</span>')+'</span></div>':'';
+      var instVer=f.installed_version?'<div class="detail-row-item"><span class="detail-key">Installed</span><span class="detail-val" style="font-family:monospace;font-size:11px">'+App.esc(f.installed_version)+'</span></div>':'';
+      var fixVer=f.fixed_version?'<div class="detail-row-item"><span class="detail-key">Fixed In</span><span class="detail-val" style="font-family:monospace;font-size:11px;color:var(--risk-low)">'+App.esc(f.fixed_version)+'</span></div>':'';
+      var evidence=f.evidence?'<div class="detail-row-item"><span class="detail-key">Evidence</span><span class="detail-val" style="font-family:monospace;font-size:11px;word-break:break-all">'+App.esc(f.evidence)+'</span></div>':'';
+      // Score component weights (show max possible)
+      var weightMap={cvss:20,epss:20,kev:25,exploit:10,asset:10,exposure:5,data:5,patch:5};
+      var compsWeighted=Object.entries(sb).map(function(kv){
+        var k=kv[0],v=kv[1];var w=weightMap[k]||'?';
+        var pct=k==='patch'?((v<0)?'penalty':''):('/ '+w);
+        return '<div style="display:flex;justify-content:space-between;padding:2px 0"><span style="color:var(--text-tertiary)">'+k+'</span><b style="color:var(--text-primary)">'+v+' <span style="color:var(--text-tertiary);font-size:10px">'+pct+'</span></b></div>';
+      }).join('');
+      var sevColor={critical:'var(--risk-critical)',high:'var(--risk-high)',medium:'var(--risk-medium)',low:'var(--risk-low)',info:'var(--text-tertiary)'};
+      var sevColorVal=sevColor[f.severity]||'var(--text-secondary)';
+      return '<div class="detail-panel"><div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-4)"><div>'+
+        '<div class="detail-section"><div class="detail-section-title">Finding Details</div>'+
+        '<div class="detail-row-item"><span class="detail-key">Severity</span><span class="detail-val" style="color:'+sevColorVal+';font-weight:600;text-transform:uppercase">'+App.esc(f.severity||'\u2014')+'</span></div>'+
         '<div class="detail-row-item"><span class="detail-key">Endpoint</span><span class="detail-val">'+App.esc(f.endpoint||'\u2014')+(f.parameter?' ('+App.esc(f.parameter)+')':'')+'</span></div>'+
-        '<div class="detail-row-item"><span class="detail-key">EPSS</span><span class="detail-val">'+App.pct(f.epss_score)+' (pct '+App.pct(f.epss_percentile)+')</span></div>'+
-        '<div class="detail-row-item"><span class="detail-key">KEV</span><span class="detail-val">'+(f.kev?'In CISA KEV ('+App.esc(f.kev_date)+')':'Not in KEV')+'</span></div>'+
-        '<div class="detail-row-item"><span class="detail-key">Exploit</span><span class="detail-val">'+(f.exploit_available?'Yes \u2014 '+App.esc(f.exploit_source):'Not found')+'</span></div>'+
+        '<div class="detail-row-item"><span class="detail-key">Product</span><span class="detail-val">'+App.esc(f.product||'\u2014')+'</span></div>'+
+        '<div class="detail-row-item"><span class="detail-key">Scanner</span><span class="detail-val">'+App.esc(f.scanner||'\u2014')+'</span></div>'+
+        '<div class="detail-row-item"><span class="detail-key">CVE</span><span class="detail-val">'+(f.cve?'<a class="cve-link" href="https://nvd.nist.gov/vuln/detail/'+App.esc(f.cve)+'" target="_blank">'+App.esc(f.cve)+'</a>':'N/A')+'</span></div>'+
+        '<div class="detail-row-item"><span class="detail-key">CWE</span><span class="detail-val">'+cweLink+'</span></div>'+
+        instVer+fixVer+pkgInfo+evidence+
         '<div class="detail-row-item"><span class="detail-key">Owner</span><span class="detail-val">'+App.esc(f.owner||'\u2014')+' \u00b7 SLA '+f.sla_hours+'h</span></div>'+
-        '<div style="margin-top:var(--space-3);color:var(--text-secondary);font-size:var(--text-xs);line-height:1.6">'+App.esc(f.description)+'</div></div>'+
-        '<div class="detail-section"><div class="detail-section-title">Score Breakdown</div>'+
-        '<div style="font-size:var(--text-xs);margin-bottom:var(--space-3);line-height:2">'+(comps||'<span class="dimmed">no breakdown</span>')+'</div>'+
+        '</div>'+
+        '<div class="detail-section"><div class="detail-section-title">\u{1f50d} Raw Enrichment Data (Before Scoring)</div>'+
+        '<div style="padding:var(--space-3);background:var(--bg-base);border-radius:6px;margin-bottom:var(--space-3)">'+
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-2);font-size:var(--text-xs)">'+
+        '<div><span style="color:var(--text-tertiary)">CVSS Score (NVD)</span><div style="font-weight:600;color:var(--text-primary);font-size:var(--text-sm)">'+cvssVal+'</div></div>'+
+        '<div><span style="color:var(--text-tertiary)">EPSS Probability (raw)</span><div style="font-weight:600;color:var(--text-primary);font-size:var(--text-sm)">'+epssRaw+' ('+epssPct+')'+epssTrendHtml+'</div></div>'+
+        '<div><span style="color:var(--text-tertiary)">EPSS Percentile</span><div style="font-weight:600;color:var(--text-primary);font-size:var(--text-sm)">'+epssPctile+'</div></div>'+
+        '<div><span style="color:var(--text-tertiary)">EPSS 7-day Trend</span><div style="font-weight:600;color:var(--text-primary);font-size:var(--text-sm)">'+(epssTrend||'N/A (no trend data)')+'</div></div>'+
+        '<div><span style="color:var(--text-tertiary)">KEV (CISA Known Exploited)</span><div style="font-size:var(--text-sm)">'+kevBadge+'</div></div>'+
+        '<div><span style="color:var(--text-tertiary)">Exploit Available</span><div style="font-size:var(--text-sm)">'+exploitBadge+'</div></div>'+
+        '</div></div>'+
+        '<div style="margin-top:var(--space-2);color:var(--text-secondary);font-size:var(--text-xs);line-height:1.6">'+(f.description||'').replace(/<p[^>]*>/gi,' ').replace(/<\/p>/gi,' ').replace(/<[^>]+>/g,'')+'</div></div></div>'+
+        '<div><div class="detail-section"><div class="detail-section-title">\u{1f4ca} Score Breakdown (0-100)</div>'+
+        '<div style="padding:var(--space-3);background:var(--bg-base);border-radius:6px;margin-bottom:var(--space-3)">'+(compsWeighted||'<span class="dimmed">no breakdown</span>')+'</div>'+
         '<div style="margin-bottom:var(--space-3)">'+drivers+'</div>'+
         '<div class="detail-section-title">Remediation Steps</div>'+
-        '<ul class="rem-list">'+(rems||'<li class="dimmed">No remediation data</li>')+'</ul></div>'+aiRem+'</div>';
+        '<ul class="rem-list">'+(rems||'<li class="dimmed">No remediation data</li>')+'</ul></div>'+aiRem+'</div></div>';
     },
     toggleDetail(tr){
       var rank=tr.dataset.rank;var detail=App.$('detail-'+rank);if(!detail)return;
@@ -890,18 +970,7 @@ const App={
         var self=this;
         sel.addEventListener('change',function(){self.render(sel.value);});
       }
-      // ResizeObserver to re-render on container size changes
-      var container=App.$('ap-container');
-      if(container&&typeof ResizeObserver!=='undefined'){
-        this._ro=new ResizeObserver(function(){
-          var s=App.$('ap-product');
-          if(s&&s.value){
-            if(self._resizeTimer)clearTimeout(self._resizeTimer);
-            self._resizeTimer=setTimeout(function(){self.render(s.value);},300);
-          }
-        });
-        this._ro.observe(container);
-      }
+      // ResizeObserver disabled to prevent zoom reset on detail panel changes
       this.render(products[0]);
     },
     render(product){
@@ -921,7 +990,7 @@ const App={
       });
       var nodes=[...nodeSet.values()];
       var links=paths.map(function(p){return{source:String(p.from_cwe),target:String(p.to_cwe),prob:p.probability,desc:p.description||''};});
-      var W=svgEl.parentElement.clientWidth||900,H=480;
+      var W=Math.max(800,(svgEl.parentElement.clientWidth||900)-340),H=Math.max(600,W*0.6);
       svgEl.setAttribute('viewBox','0 0 '+W+' '+H);
       var svg=d3.select('#ap-svg');var g=svg.append('g');
       this.zoom=d3.zoom().scaleExtent([.3,3]).on('zoom',function(e){g.attr('transform',e.transform);});
@@ -938,18 +1007,48 @@ const App={
       var linkLabel=g.append('g').selectAll('text').data(links).join('text').text(function(d){return parseFloat(d.prob).toFixed(2);}).attr('font-size',9).attr('fill','#6B7280').attr('text-anchor','middle');
       var nodeG=g.append('g').selectAll('g').data(nodes).join('g').call(d3.drag().on('start',function(e,d){if(!e.active)sim.alphaTarget(.3).restart();d.fx=d.x;d.fy=d.y;}).on('drag',function(e,d){d.fx=e.x;d.fy=e.y;}).on('end',function(e,d){if(!e.active)sim.alphaTarget(0);d.fx=null;d.fy=null;}));
       nodeG.append('circle').attr('r',function(d){return d.group===2?28:d.group===1?24:20;}).attr('fill',function(d){return d.group===2?'rgba(239,68,68,.12)':d.group===1?'rgba(59,130,246,.12)':'rgba(107,114,128,.08)';}).attr('stroke',function(d){return d.group===2?'#EF4444':d.group===1?'#3B82F6':'#6B7280';}).attr('stroke-width',1.5);
-      nodeG.append('text').text(function(d){return d.id.replace('CWE-','');}).attr('text-anchor','middle').attr('dy','0.35em').attr('font-size',10).attr('font-weight',600).attr('fill','#E8EAED');
+      nodeG.append('text').text(function(d){return d.id;}).attr('text-anchor','middle').attr('dy','0.35em').attr('font-size',9).attr('font-weight',600).attr('fill','#E8EAED').style('cursor','pointer');
       // Use clientX/clientY for correct tooltip positioning relative to container
-      nodeG.on('mouseover',function(e,d){if(tooltip){tooltip.style.display='block';tooltip.innerHTML='<b>'+d.id+'</b><br>'+(d.group===2?'High-impact target':d.group===1?'Entry point':'Intermediate');}}).on('mousemove',function(e){if(!container||!tooltip)return;var r=container.getBoundingClientRect();tooltip.style.left=(e.clientX-r.left+12)+'px';tooltip.style.top=(e.clientY-r.top-30)+'px';}).on('mouseout',function(){if(tooltip)tooltip.style.display='none';});
-      link.on('mouseover',function(e,d){if(tooltip){tooltip.style.display='block';var srcId=typeof d.source==='object'&&d.source!==null?d.source.id:String(d.source);var tgtId=typeof d.target==='object'&&d.target!==null?d.target.id:String(d.target);tooltip.innerHTML='<b>'+srcId+' to '+tgtId+'</b><br>Probability: '+parseFloat(d.prob).toFixed(2);}}).on('mousemove',function(e){if(!container||!tooltip)return;var r=container.getBoundingClientRect();tooltip.style.left=(e.clientX-r.left+12)+'px';tooltip.style.top=(e.clientY-r.top-30)+'px';}).on('mouseout',function(){if(tooltip)tooltip.style.display='none';});
-      var sim=d3.forceSimulation(nodes).force('link',d3.forceLink(links).id(function(d){return d.id;}).distance(function(d){return 100+d.prob*60;})).force('charge',d3.forceManyBody().strength(-350)).force('center',d3.forceCenter(W/2,H/2)).force('collision',d3.forceCollide(35)).alphaDecay(0.02).velocityDecay(0.3);
+      nodeG.on('mouseover',function(e,d){if(tooltip){tooltip.style.display='block';tooltip.innerHTML='<b>'+d.id+'</b><br>'+(d.group===2?'High-impact target':d.group===1?'Entry point':'Intermediate')+'<br><span style=\"font-size:10px;color:#6B7280\">Click for details</span>';}}).on('mousemove',function(e){if(!container||!tooltip)return;var r=container.getBoundingClientRect();tooltip.style.left=(e.clientX-r.left+12)+'px';tooltip.style.top=(e.clientY-r.top-30)+'px';}).on('mouseout',function(){if(tooltip)tooltip.style.display='none';}).on('click',function(e,d){App.attackPaths.showNodeDetail(d,product);});
+      link.on('mouseover',function(e,d){if(tooltip){tooltip.style.display='block';var srcId=typeof d.source==='object'&&d.source!==null?d.source.id:String(d.source);var tgtId=typeof d.target==='object'&&d.target!==null?d.target.id:String(d.target);tooltip.innerHTML='<b>'+srcId+' to '+tgtId+'</b><br>Probability: '+parseFloat(d.prob).toFixed(2)+'<br><span style=\"font-size:10px;color:#6B7280\">Click for details</span>';}}).on('mousemove',function(e){if(!container||!tooltip)return;var r=container.getBoundingClientRect();tooltip.style.left=(e.clientX-r.left+12)+'px';tooltip.style.top=(e.clientY-r.top-30)+'px';}).on('mouseout',function(){if(tooltip)tooltip.style.display='none';}).on('click',function(e,d){App.attackPaths.showLinkDetail(d,product);});
+      var sim=d3.forceSimulation(nodes).force('link',d3.forceLink(links).id(function(d){return d.id;}).distance(function(d){return 140+d.prob*80;})).force('charge',d3.forceManyBody().strength(-500)).force('center',d3.forceCenter(W/2,H/2)).force('collision',d3.forceCollide(45)).alphaDecay(0.02).velocityDecay(0.3);
       sim.on('tick',function(){
         link.attr('x1',function(d){return d.source.x;}).attr('y1',function(d){return d.source.y;}).attr('x2',function(d){return d.target.x;}).attr('y2',function(d){return d.target.y;});
         linkLabel.attr('x',function(d){return(d.source.x+d.target.x)/2;}).attr('y',function(d){return(d.source.y+d.target.y)/2-6;});
         nodeG.attr('transform',function(d){return 'translate('+d.x+','+d.y+')';});
       });
     },
-    reset(){if(this.svgRoot)this.svgRoot.transition().duration(500).call(this.zoom.transform,d3.zoomIdentity);}
+    reset(){if(this.svgRoot)this.svgRoot.transition().duration(500).call(this.zoom.transform,d3.zoomIdentity);},
+    _fcw(cwe,product){return(App.data.findings||[]).filter(function(f){return f.product===product&&f.cwe===cwe&&f.status!=='quarantined';});},
+    _pcfg(product){return(App.data.products||{})[product]||{};},
+    showNodeDetail(d,product){
+      var p=App.$('ap-detail-panel');if(!p)return;
+      var ff=this._fcw(d.id,product),paths=(App.data.attack_paths[product]||[]).filter(function(x){return x.from_cwe===d.id||x.to_cwe===d.id;});
+      var role=d.group===2?'High-Impact Target':d.group===1?'Entry Point':'Intermediate';
+      var rc=d.group===2?'#EF4444':d.group===1?'#3B82F6':'#6B7280';
+      var h='<div style="margin-bottom:var(--space-4)"><div style="display:flex;align-items:center;gap:var(--space-2);margin-bottom:var(--space-3)"><span style="width:12px;height:12px;border-radius:50%;background:'+rc+'"></span><strong style="font-size:var(--text-md);color:var(--text-primary)">'+App.esc(d.id)+'</strong></div><div class="badge" style="background:rgba(59,130,246,0.1);color:#3B82F6">'+role+'</div></div>';
+      h+='<div style="margin-bottom:var(--space-4);padding:var(--space-3);background:var(--bg-elevated);border-radius:6px"><div style="font-size:10px;font-weight:600;text-transform:uppercase;color:var(--text-muted);margin-bottom:var(--space-2)">Product</div><div style="font-size:var(--text-xs);color:var(--text-primary)">'+App.esc(product)+'</div><div style="font-size:var(--text-xs);color:var(--text-tertiary)">'+App.esc(this._pcfg(product).url||'No URL')+'</div></div>';
+      h+='<div style="margin-bottom:var(--space-4)"><div style="font-size:10px;font-weight:600;text-transform:uppercase;color:var(--text-muted);margin-bottom:var(--space-2)">Findings ('+ff.length+')</div>';
+      if(!ff.length)h+='<div style="font-size:var(--text-xs);color:var(--text-tertiary)">No active findings</div>';
+      else ff.slice(0,10).forEach(function(f){h+='<div style="padding:var(--space-2);border-bottom:1px solid var(--border-subtle);font-size:var(--text-xs)"><div style="color:var(--text-primary);margin-bottom:2px">'+App.esc((f.title||'').substring(0,60))+'</div><div style="display:flex;gap:var(--space-2);color:var(--text-tertiary)"><span class="badge '+App.sevClass(f.severity)+'">'+App.esc(f.severity)+'</span><span>'+App.esc(f.scanner)+'</span>'+(f.cve?'<span class="cve-link" style="font-size:10px">'+App.esc(f.cve)+'</span>':'')+'</div></div>';});
+      if(ff.length>10)h+='<div style="font-size:var(--text-xs);color:var(--text-tertiary);padding:var(--space-2)">...and '+(ff.length-10)+' more</div>';
+      h+='</div><div><div style="font-size:10px;font-weight:600;text-transform:uppercase;color:var(--text-muted);margin-bottom:var(--space-2)">Attack Paths ('+paths.length+')</div>';
+      paths.forEach(function(x){var pc=x.probability>0.6?'#EF4444':x.probability>0.3?'#F59E0B':'#22C55E';h+='<div style="padding:var(--space-2);border-bottom:1px solid var(--border-subtle);font-size:var(--text-xs)"><div style="color:var(--text-primary)">'+App.esc(x.from_cwe)+' \u2192 '+App.esc(x.to_cwe)+'</div><div style="color:'+pc+';font-weight:600">'+(x.probability*100).toFixed(1)+'%</div>'+(x.description?'<div style="color:var(--text-tertiary);margin-top:2px">'+App.esc(x.description.substring(0,100))+'</div>':'')+'</div>';});
+      h+='</div>';p.innerHTML=h;p.style.display='block';
+    },
+    showLinkDetail(d,product){
+      var p=App.$('ap-detail-panel');if(!p)return;
+      var si=typeof d.source==='object'?d.source.id:String(d.source);
+      var ti=typeof d.target==='object'?d.target.id:String(d.target);
+      var paths=(App.data.attack_paths[product]||[]).filter(function(x){return x.from_cwe===si&&x.to_cwe===ti;});
+      var path=paths[0]||{};var pc=(path.probability||0)>0.6?'#EF4444':(path.probability||0)>0.3?'#F59E0B':'#22C55E';
+      var h='<div style="margin-bottom:var(--space-4)"><strong style="font-size:var(--text-md);color:var(--text-primary)">'+App.esc(si)+' \u2192 '+App.esc(ti)+'</strong></div>';
+      h+='<div style="padding:var(--space-3);background:var(--bg-elevated);border-radius:6px;margin-bottom:var(--space-4)"><div style="font-size:var(--text-xs);color:var(--text-secondary);margin-bottom:var(--space-2)">'+App.esc(path.description||'No description')+'</div><div style="display:flex;align-items:center;gap:var(--space-2)"><span style="font-size:var(--text-xl);font-weight:700;color:'+pc+'">'+((path.probability||0)*100).toFixed(1)+'%</span><span style="font-size:var(--text-xs);color:var(--text-tertiary)">escalation probability</span></div></div>';
+      if(path.factors&&path.factors.length){h+='<div style="margin-bottom:var(--space-4)"><div style="font-size:10px;font-weight:600;text-transform:uppercase;color:var(--text-muted);margin-bottom:var(--space-2)">Factors</div>';path.factors.forEach(function(f){h+='<div style="font-size:var(--text-xs);color:var(--text-secondary);padding:2px 0">\u2022 '+App.esc(f)+'</div>';});h+='</div>';}
+      if(path.capec_ref){h+='<div style="margin-bottom:var(--space-4)"><div style="font-size:10px;font-weight:600;text-transform:uppercase;color:var(--text-muted);margin-bottom:var(--space-2)">Reference</div><div style="font-size:var(--text-xs);color:var(--risk-info)">'+App.esc(path.capec_ref)+'</div></div>';}
+      [si,ti].forEach(function(cwe){var ff=(App.data.findings||[]).filter(function(f){return f.product===product&&f.cwe===cwe&&f.status!=='quarantined';});if(ff.length){h+='<div style="margin-bottom:var(--space-3)"><div style="font-size:10px;font-weight:600;text-transform:uppercase;color:var(--text-muted);margin-bottom:var(--space-2)">'+App.esc(cwe)+' findings ('+ff.length+')</div>';ff.slice(0,5).forEach(function(f){h+='<div style="font-size:var(--text-xs);color:var(--text-secondary);padding:2px 0">\u2022 '+App.esc((f.title||'').substring(0,50))+' <span class="badge '+App.sevClass(f.severity)+'" style="font-size:9px">'+App.esc(f.severity)+'</span></div>';});h+='</div>';}});
+      p.innerHTML=h;p.style.display='block';
+    }
   },
 
   /* ═══ QUARANTINE ═══ */    buildQuarantine(){
@@ -976,15 +1075,15 @@ const App={
         if(!f.product)return;
         if(!findingsByProduct[f.product])findingsByProduct[f.product]={total:0,p1:0,p2:0};
         findingsByProduct[f.product].total++;
-        if(f.priority==='P1')findingsByProduct[f.product].p1++;
-        if(f.priority==='P2')findingsByProduct[f.product].p2++;
+        if(f.priority==='Critical')findingsByProduct[f.product].p1++;
+        if(f.priority==='High')findingsByProduct[f.product].p2++;
       });
       var rows=keys.map(function(k){
         var p=P[k];var fc=findingsByProduct[k]||{total:0,p1:0,p2:0};
-        return '<tr><td><strong>'+App.esc(p.display_name||k)+'</strong><br><span class="dimmed" style="font-size:11px">'+App.esc(k)+'</span></td><td class="mono" style="font-size:11px">'+App.esc(p.url||'\u2014')+'</td><td class="dimmed" style="font-size:11px">'+App.esc(p.owner||'\u2014')+'</td><td class="mono" style="font-size:11px">'+(p.asset_criticality||5)+'/10</td><td class="mono" style="font-size:11px">'+fc.total+'</td><td>'+(fc.p1>0?'<span class="badge b-p1">'+fc.p1+'</span>':'')+(fc.p2>0?' <span class="badge b-p2">'+fc.p2+'</span>':'')+'</td><td><button class="btn btn-secondary btn-sm" data-scan="'+App.esc(k)+'">Scan</button></td></tr>';
+        return '<tr><td><strong>'+App.esc(p.display_name||k)+'</strong><br><span class="dimmed" style="font-size:11px">'+App.esc(k)+'</span></td><td class="mono" style="font-size:11px">'+App.esc(p.url||'\u2014')+'</td><td class="dimmed" style="font-size:11px">'+App.esc(p.owner||'\u2014')+'</td><td class="mono" style="font-size:11px">'+(p.asset_criticality||5)+'/10</td><td class="mono" style="font-size:11px">'+fc.total+'</td><td>'+(fc.p1>0?'<span class="badge b-p1">'+fc.p1+'</span>':'')+(fc.p2>0?' <span class="badge b-p2">'+fc.p2+'</span>':'')+'</td><td><div style="display:flex;gap:var(--space-1)"><button class="btn btn-secondary btn-sm" data-scan="'+App.esc(k)+'">Scan</button><button class="btn btn-sm" style="background:rgba(239,68,68,0.1);color:#EF4444;border:1px solid rgba(239,68,68,0.2)" data-delete="'+App.esc(k)+'">Delete</button></div></td></tr>';
       }).join('');
       var ptw=App.$('products-table-wrap');
-      ptw.innerHTML='<table class="data-table"><thead><tr><th>Product</th><th>URL</th><th>Owner</th><th>Criticality</th><th>Findings</th><th>P1/P2</th><th>Actions</th></tr></thead><tbody>'+rows+'</tbody></table>';
+      ptw.innerHTML='<table class="data-table"><thead><tr><th>Product</th><th>URL</th><th>Owner</th><th>Criticality</th><th>Findings</th><th>Critical/High</th><th>Actions</th></tr></thead><tbody>'+rows+'</tbody></table>';
       // Event delegation for scan buttons
       ptw.addEventListener('click',function(e){
         var btn=e.target.closest('[data-scan]');if(btn)App.products.scan(btn.dataset.scan);
@@ -994,17 +1093,24 @@ const App={
       var id=(App.$('ap-id').value||'').trim();var name=(App.$('ap-name').value||'').trim()||id;var url=(App.$('ap-url').value||'').trim();
       var repo=(App.$('ap-repo').value||'').trim();var owner=(App.$('ap-owner').value||'').trim();
       var crit=parseInt(App.$('ap-crit').value)||5;var sens=parseInt(App.$('ap-sens').value)||5;
-      var trivy=(App.$('ap-trivy').value||'').trim();
+      var self=this;
       if(!id||!url){var m=App.$('ap-msg');if(m){m.textContent='Product ID and URL are required';m.style.color='#EF4444';}return;}
       App.apiFetch('/api/products',{method:'POST',body:JSON.stringify({product_id:id,display_name:name,url:url,github_repo:repo,owner:owner||'unassigned',asset_criticality:crit,data_sensitivity:sens})}).then(function(data){
         var m2=App.$('ap-msg');if(m2){m2.textContent=data.status==='created'?'Product saved!':'Updated';m2.style.color='#22C55E';}
-      }).catch(function(){
+        ['ap-id','ap-name','ap-url','ap-repo','ap-owner','ap-trivy'].forEach(function(fid){var el=App.$(fid);if(el)el.value='';});
+        return App.apiFetch('/api/products');
+      }).then(function(data){
+        if(data&&data.products){App.data.products=data.products;}
+        self.init();
+      }).catch(function(e){
+        var m3=App.$('ap-msg');
+        if(e.message&&e.message.indexOf('409')>-1){if(m3){m3.textContent='Product already exists';m3.style.color='#EF4444';}return;}
         App.data.products=App.data.products||{};
         App.data.products[id]={display_name:name,owner:owner||'unassigned',asset_criticality:crit,url:url,github_repo:repo};
-        var m3=App.$('ap-msg');if(m3){m3.textContent='Saved locally';m3.style.color='#EAB308';}
+        if(m3){m3.textContent='Saved locally (offline)';m3.style.color='#EAB308';}
+        ['ap-id','ap-name','ap-url','ap-repo','ap-owner','ap-trivy'].forEach(function(fid){var el=App.$(fid);if(el)el.value='';});
+        self.init();
       });
-      ['ap-id','ap-name','ap-url','ap-repo','ap-owner','ap-trivy'].forEach(function(fid){var el=App.$(fid);if(el)el.value='';});
-      this.init();
     },
     scan(id){
       App.toast('Starting scan for '+id+'...','info');
@@ -1035,11 +1141,28 @@ const App={
       var proto=location.protocol==='https:'?'wss:':'ws:';
       try{
         App.state.ws=new WebSocket(proto+'//'+location.host+'/ws/live');
-        App.state.wsRetries=0;
+        App.state.ws.onopen=function(){App.state.wsRetries=0;};
         App.state.ws.onmessage=function(e){try{var msg=JSON.parse(e.data);if(msg.type==='scan_update')self.handleScanUpdate(msg.data);}catch(x){}};
         App.state.ws.onclose=function(){App.state.wsRetries++;setTimeout(function(){self.connectWS();},5000);};
         App.state.ws.onerror=function(){};
       }catch(x){App.state.wsRetries++;}
+    },
+    _startTiming(){
+      if(App.control._timingInterval)clearInterval(App.control._timingInterval);
+      App.control._timingInterval=setInterval(function(){
+        var el=App.$('scanner-progress');if(!el)return;
+        el.querySelectorAll('[data-job]').forEach(function(d){
+          var ts=parseFloat(d.dataset.started||'0');
+          if(ts>0&&!d.dataset.finished){
+            var elapsed=Date.now()/1000-ts;
+            var timerEl=d.querySelector('.scanner-timer');
+            if(timerEl)timerEl.textContent=elapsed.toFixed(1)+'s';
+          }
+        });
+      },1000);
+    },
+    _stopTiming(){
+      if(App.control._timingInterval){clearInterval(App.control._timingInterval);App.control._timingInterval=null;}
     },
     _setScannerEmpty(){var el=App.$('scanner-progress');if(el)el.innerHTML='<div class="empty-state" style="padding:var(--space-5)"><p class="empty-state-desc">No active scans</p></div>';},
     handleScanUpdate(job){
@@ -1048,9 +1171,13 @@ const App={
       if(!existing){var empty=el.querySelector('.empty-state');if(empty)empty.remove();existing=document.createElement('div');existing.setAttribute('data-job',job.job_id);el.appendChild(existing);}
       var statusColors={pending:'#6B7280',running:'#3B82F6',completed:'#22C55E',failed:'#EF4444'};
       var sc=statusColors[job.status]||'#6B7280';
-      // Elapsed assumes started_at is in seconds (Unix timestamp)
+      var startedStr=job.started_at?new Date(job.started_at*1000).toLocaleTimeString():'';
+      existing.setAttribute('data-started',job.started_at||'');
+      if(job.finished_at||job.status==='completed'||job.status==='failed')existing.setAttribute('data-finished','1');
       var elapsed=job.started_at?(job.finished_at||Date.now()/1000)-job.started_at:0;
-      existing.innerHTML='<div style="display:flex;align-items:center;gap:var(--space-3);padding:var(--space-2) 0;border-bottom:1px solid var(--border-subtle)"><span class="status-dot" style="background:'+sc+'"></span><div style="flex:1"><div style="font-size:var(--text-xs);font-weight:500;color:var(--text-primary)">'+App.esc(job.product)+' / '+App.esc(job.scanner)+'</div><div class="dimmed" style="font-size:10px">'+App.esc(job.target_url)+'</div></div><div style="text-align:right"><span style="font-size:10px;color:'+sc+'">'+job.status+'</span><div class="dimmed" style="font-size:10px">'+elapsed.toFixed(1)+'s</div></div></div>';
+      existing.innerHTML='<div style="display:flex;align-items:center;gap:var(--space-3);padding:var(--space-2) 0;border-bottom:1px solid var(--border-subtle)"><span class="status-dot" style="background:'+sc+'"></span><div style="flex:1"><div style="font-size:var(--text-xs);font-weight:500;color:var(--text-primary)">'+App.esc(job.product)+' / '+App.esc(job.scanner)+'</div><div class="dimmed" style="font-size:10px">'+App.esc(job.target_url)+'</div></div><div style="text-align:right"><span style="font-size:10px;color:'+sc+'">'+job.status+'</span><div class="dimmed" style="font-size:10px">'+startedStr+' <span class="scanner-timer">'+elapsed.toFixed(1)+'s</span></div></div></div>';
+      if(job.status==='running')App.control._startTiming();
+      else App.control._stopTiming();
     },
     loadJobs(){
       App.apiFetch('/api/scans/jobs').then(function(data){
@@ -1061,7 +1188,8 @@ const App={
             var statusColors={pending:'#6B7280',running:'#3B82F6',completed:'#22C55E',failed:'#EF4444'};
             var sc=statusColors[job.status]||'#6B7280';
             var elapsed=job.started_at?(job.finished_at||Date.now()/1000)-job.started_at:0;
-            return '<div data-job="'+job.job_id+'" style="display:flex;align-items:center;gap:var(--space-3);padding:var(--space-2) 0;border-bottom:1px solid var(--border-subtle)"><span class="status-dot" style="background:'+sc+'"></span><div style="flex:1"><div style="font-size:var(--text-xs);font-weight:500;color:var(--text-primary)">'+App.esc(job.product)+' / '+App.esc(job.scanner)+'</div></div><span style="font-size:10px;color:'+sc+'">'+job.status+'</span></div>';
+            var startedStr=job.started_at?new Date(job.started_at*1000).toLocaleTimeString():'';
+            return '<div data-job="'+job.job_id+'" style="display:flex;align-items:center;gap:var(--space-3);padding:var(--space-2) 0;border-bottom:1px solid var(--border-subtle)"><span class="status-dot" style="background:'+sc+'"></span><div style="flex:1"><div style="font-size:var(--text-xs);font-weight:500;color:var(--text-primary)">'+App.esc(job.product)+' / '+App.esc(job.scanner)+'</div></div><div style="text-align:right"><span style="font-size:10px;color:'+sc+'">'+job.status+'</span><div class="dimmed" style="font-size:10px">'+startedStr+' \u00b7 '+elapsed.toFixed(1)+'s</div></div></div>';
           }).join('');
         }else{App.control._setScannerEmpty();}
       }).catch(function(){App.control._setScannerEmpty();});
@@ -1102,9 +1230,79 @@ const App={
 
   /* ═══ LIFECYCLE ═══ */
   lifecycle:{
+    _allFindings:[],
+    _renderTable(tracked){
+      this._renderedFindings=tracked;
+      var statusConfig={open:{color:'#F59E0B',border:'#F59E0B'},in_progress:{color:'#3B82F6',border:'#3B82F6'},fixed:{color:'#22C55E',border:'#22C55E'},verified:{color:'#22D3EE',border:'#22D3EE'},accepted:{color:'#6B7280',border:'#6B7280'},false_positive:{color:'#EF4444',border:'#EF4444'},risk_accepted:{color:'#6B7280',border:'#6B7280'}};
+      var now=new Date();
+      if(!tracked.length){App.$('lc-table-wrap').innerHTML='<div class="empty-state"><p class="empty-state-title">No matching findings</p></div>';return;}
+      var rows=tracked.map(function(f,i){
+        var sc=statusConfig[f.status]||{color:'#6B7280',border:'#6B7280'};
+        var isBreach=false;
+        if(f.sla_deadline){var slaDate=new Date(f.sla_deadline);if(!isNaN(slaDate.getTime()))isBreach=slaDate<now&&(f.status==='open'||f.status==='in_progress');}
+        var descPreview=f.description?App.esc((f.description||'').replace(/<[^>]+>/g,'').substring(0,80)):'';
+        return '<tr data-idx="'+i+'"><td>'+App.esc(f.product)+'</td><td><span class="badge '+App.sevClass(f.severity)+'">'+App.esc(f.severity)+'</span></td><td class="truncate" style="max-width:200px;color:var(--text-primary);font-weight:500" title="'+descPreview+'">'+App.esc(f.title)+'</td><td class="no-wrap">'+(f.cve?App.esc(f.cve):'<span class="dimmed">—</span>')+'</td><td><span class="status-border" style="border-color:'+sc.border+';color:'+sc.color+';font-size:11px">'+f.status.replace('_',' ')+'</span></td><td class="no-wrap" style="font-size:11px;'+(isBreach?'color:var(--risk-critical);font-weight:700':'color:var(--text-muted)')+'">'+(isBreach?'BREACHED':'OK')+'</td><td class="dimmed" style="font-size:11px">'+App.esc(f.owner||'—')+'</td></tr>';
+      }).join('');
+      App.$('lc-table-wrap').innerHTML='<table class="data-table"><thead><tr><th>Product</th><th>Severity</th><th>Title</th><th>CVE</th><th>Status</th><th>SLA</th><th>Owner</th></tr></thead><tbody>'+rows+'</tbody></table>';
+
+      // Wire row clicks
+
+      var tw=App.$('lc-table-wrap');
+
+      if(tw){tw.onclick=function(e){var tr=e.target.closest('tr[data-idx]');if(tr)App.lifecycle.showDetail(parseInt(tr.dataset.idx));};}
+    },
+    showDetail(idx){
+      var f=(this._renderedFindings||this._allFindings)[idx];if(!f)return;
+      var el=App.$('lc-detail-content');var card=App.$('lc-detail-card');
+      if(!el||!card)return;
+      var h='<div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-4)">';
+      h+='<div>';
+      h+='<div style="margin-bottom:var(--space-3)"><div style="font-size:10px;font-weight:600;text-transform:uppercase;color:var(--text-muted)">Product</div><div style="font-size:var(--text-sm);color:var(--text-primary)">'+App.esc(f.product)+'</div></div>';
+      h+='<div style="margin-bottom:var(--space-3)"><div style="font-size:10px;font-weight:600;text-transform:uppercase;color:var(--text-muted)">Severity</div><div><span class="badge '+App.sevClass(f.severity)+'">'+App.esc(f.severity)+'</span></div></div>';
+      h+='<div style="margin-bottom:var(--space-3)"><div style="font-size:10px;font-weight:600;text-transform:uppercase;color:var(--text-muted)">Title</div><div style="font-size:var(--text-sm);color:var(--text-primary)">'+App.esc(f.title)+'</div></div>';
+      if(f.cve)h+='<div style="margin-bottom:var(--space-3)"><div style="font-size:10px;font-weight:600;text-transform:uppercase;color:var(--text-muted)">CVE</div><div><a class="cve-link" href="https://nvd.nist.gov/vuln/detail/'+App.esc(f.cve)+'" target="_blank">'+App.esc(f.cve)+'</a></div></div>';
+      if(f.cwe)h+='<div style="margin-bottom:var(--space-3)"><div style="font-size:10px;font-weight:600;text-transform:uppercase;color:var(--text-muted)">CWE</div><div style="font-size:var(--text-xs);color:var(--text-secondary)">'+App.esc(f.cwe)+'</div></div>';
+      if(f.endpoint)h+='<div style="margin-bottom:var(--space-3)"><div style="font-size:10px;font-weight:600;text-transform:uppercase;color:var(--text-muted)">Endpoint</div><div style="font-size:var(--text-xs);color:var(--text-secondary);word-break:break-all">'+App.esc(f.endpoint)+'</div></div>';
+      h+='</div><div>';
+      var sc={open:'#F59E0B',in_progress:'#3B82F6',fixed:'#22C55E',verified:'#22D3EE',false_positive:'#EF4444',risk_accepted:'#6B7280'};
+      var sColor=sc[f.status]||'#6B7280';
+      h+='<div style="margin-bottom:var(--space-3)"><div style="font-size:10px;font-weight:600;text-transform:uppercase;color:var(--text-muted)">Status</div><div style="color:'+sColor+';font-weight:600">'+(f.status||'').replace('_',' ')+'</div></div>';
+      h+='<div style="margin-bottom:var(--space-3)"><div style="font-size:10px;font-weight:600;text-transform:uppercase;color:var(--text-muted)">Owner</div><div style="font-size:var(--text-xs);color:var(--text-secondary)">'+App.esc(f.owner||'Unassigned')+'</div></div>';
+      if(f.first_seen)h+='<div style="margin-bottom:var(--space-3)"><div style="font-size:10px;font-weight:600;text-transform:uppercase;color:var(--text-muted)">Discovered</div><div style="font-size:var(--text-xs);color:var(--text-secondary)">'+App.esc(f.first_seen)+'</div></div>';
+      if(f.last_seen)h+='<div style="margin-bottom:var(--space-3)"><div style="font-size:10px;font-weight:600;text-transform:uppercase;color:var(--text-muted)">Last Seen</div><div style="font-size:var(--text-xs);color:var(--text-secondary)">'+App.esc(f.last_seen)+'</div></div>';
+      if(f.sla_deadline){var slaDate=new Date(f.sla_deadline);var now=new Date();var breached=!isNaN(slaDate.getTime())&&slaDate<now&&(f.status==='open'||f.status==='in_progress');
+        h+='<div style="margin-bottom:var(--space-3)"><div style="font-size:10px;font-weight:600;text-transform:uppercase;color:var(--text-muted)">SLA Deadline</div><div style="font-size:var(--text-xs);'+(breached?'color:var(--risk-critical);font-weight:700':'color:var(--text-secondary)')+'">'+App.esc(f.sla_deadline)+(breached?' (BREACHED)':'')+'</div></div>';}
+      if(f.description)h+='<div style="margin-bottom:var(--space-3)"><div style="font-size:10px;font-weight:600;text-transform:uppercase;color:var(--text-muted)">Description</div><div style="font-size:var(--text-xs);color:var(--text-secondary);line-height:1.6">'+(f.description||'').replace(/<[^>]+>/g,'')+'</div></div>';
+      if(f.scanner)h+='<div style="margin-bottom:var(--space-3)"><div style="font-size:10px;font-weight:600;text-transform:uppercase;color:var(--text-muted)">Source Scanner</div><div style="font-size:var(--text-xs);color:var(--text-secondary)">'+App.esc(f.scanner)+'</div></div>';
+      h+='</div></div>';
+      el.innerHTML=h;card.style.display='block';
+      card.scrollIntoView({behavior:'smooth',block:'nearest'});
+    },
+    _applyFilters(){
+      var fStatus=App.$('lc-f-status')?App.$('lc-f-status').value:'';
+      var fSev=App.$('lc-f-severity')?App.$('lc-f-severity').value:'';
+      var fProd=App.$('lc-f-product')?App.$('lc-f-product').value:'';
+      var fSla=App.$('lc-f-sla')?App.$('lc-f-sla').value:'';
+      var now=new Date();
+      var filtered=this._allFindings.filter(function(f){
+        if(fStatus&&f.status!==fStatus)return false;
+        if(fSev&&f.severity!==fSev)return false;
+        if(fProd&&f.product!==fProd)return false;
+        if(fSla==='breached'){
+          if(!f.sla_deadline)return false;
+          var d=new Date(f.sla_deadline);if(isNaN(d.getTime()))return false;
+          if(!(d<now&&(f.status==='open'||f.status==='in_progress')))return false;
+        }else if(fSla==='ok'){
+          if(f.sla_deadline){var d2=new Date(f.sla_deadline);if(!isNaN(d2.getTime())&&d2<now&&(f.status==='open'||f.status==='in_progress'))return false;}
+        }
+        return true;
+      });
+      this._renderTable(filtered);
+    },
     init(){
       var LC=App.data.lifecycle||{};
       var tracked=LC.findings||[];
+      this._allFindings=tracked;
       var statusCounts=LC.status_counts||{};
       var overdueCount=LC.overdue_count||0;
       var openCount=(statusCounts.open||0);
@@ -1114,20 +1312,21 @@ const App={
       var sl=App.$('lc-summary');
       if(sl)sl.innerHTML='Tracking <span style="color:var(--text-primary);font-weight:600">'+tracked.length+'</span> \u00b7 <span style="color:var(--risk-high);font-weight:600">'+openCount+'</span> open \u00b7 <span style="color:var(--risk-info);font-weight:600">'+inProgCount+'</span> in progress \u00b7 <span style="color:var(--risk-low);font-weight:600">'+fixedCount+'</span> fixed \u00b7 <span style="color:var(--risk-critical);font-weight:600">'+overdueCount+'</span> breached';
       var tcl=App.$('tc-lifecycle');if(tcl)tcl.textContent='('+tracked.length+')';
+      // Populate filter dropdowns
+      var statuses=[...new Set(tracked.map(function(f){return f.status;}))].sort();
+      var sevs=[...new Set(tracked.map(function(f){return f.severity;}))].sort();
+      var prods=[...new Set(tracked.map(function(f){return f.product;}))].sort();
+      [['lc-f-status',statuses],['lc-f-severity',sevs],['lc-f-product',prods]].forEach(function(arr){
+        var sel=App.$(arr[0]);if(!sel)return;
+        var firstOpt=sel.options[0];sel.innerHTML='';sel.appendChild(firstOpt);
+        arr[1].forEach(function(v){var o=document.createElement('option');o.value=v;o.textContent=v;sel.appendChild(o);});
+      });
+      var self=this;
+      ['lc-f-status','lc-f-severity','lc-f-product','lc-f-sla'].forEach(function(id){
+        var el=App.$(id);if(el)el.onchange=function(){self._applyFilters();};
+      });
       // Table
-      if(tracked.length>0){
-        var statusConfig={open:{color:'#F59E0B',border:'#F59E0B'},in_progress:{color:'#3B82F6',border:'#3B82F6'},fixed:{color:'#22C55E',border:'#22C55E'},verified:{color:'#22D3EE',border:'#22D3EE'},accepted:{color:'#6B7280',border:'#6B7280'},false_positive:{color:'#EF4444',border:'#EF4444'},risk_accepted:{color:'#6B7280',border:'#6B7280'}};
-        var now=new Date();
-        var rows=tracked.slice(0,100).map(function(f){
-          var sc=statusConfig[f.status]||{color:'#6B7280',border:'#6B7280'};
-          var isBreach=false;
-        if(f.sla_deadline){var slaDate=new Date(f.sla_deadline);if(!isNaN(slaDate.getTime()))isBreach=slaDate<now&&(f.status==='open'||f.status==='in_progress');}
-          return '<tr><td>'+App.esc(f.product)+'</td><td><span class="badge '+App.sevClass(f.severity)+'">'+App.esc(f.severity)+'</span></td><td class="truncate" style="max-width:200px;color:var(--text-primary);font-weight:500">'+App.esc(f.title)+'</td><td class="no-wrap">'+(f.cve?App.esc(f.cve):'<span class="dimmed">\u2014</span>')+'</td><td><span class="status-border" style="border-color:'+sc.border+';color:'+sc.color+';font-size:11px">'+f.status.replace('_',' ')+'</span></td><td class="no-wrap" style="font-size:11px;'+(isBreach?'color:var(--risk-critical);font-weight:700':'color:var(--text-muted)')+'">'+(isBreach?'BREACHED':'OK')+'</td><td class="dimmed" style="font-size:11px">'+App.esc(f.owner||'\u2014')+'</td></tr>';
-        }).join('');
-        App.$('lc-table-wrap').innerHTML='<table class="data-table"><thead><tr><th>Product</th><th>Severity</th><th>Title</th><th>CVE</th><th>Status</th><th>SLA</th><th>Owner</th></tr></thead><tbody>'+rows+'</tbody></table>';
-      }else{
-        App.$('lc-table-wrap').innerHTML='<div class="empty-state"><p class="empty-state-title">No Lifecycle Data</p><p class="empty-state-desc">Run the pipeline to start tracking.</p></div>';
-      }
+      this._renderTable(tracked);
       // SLA breaches
       var overdue=LC.overdue_findings||[];
       var lcbl=App.$('lc-breached-list');
@@ -1157,11 +1356,11 @@ const App={
         var scanMap={};App.data.findings.forEach(function(f){scanMap[f.scanner]=(scanMap[f.scanner]||0)+1;});scannerCounts=scanMap;
       }
       var scanKeys=Object.keys(scannerCounts).filter(function(k){return scannerCounts[k]>0;}).sort(function(a,b){return scannerCounts[b]-scannerCounts[a];});
-      if(App.hasChart&&App.$('c-dedup-scanner')){
+      if(typeof Chart!=='undefined'&&App.$('c-dedup-scanner')){
         new Chart(App.$('c-dedup-scanner'),{type:'bar',data:{labels:scanKeys,datasets:[{data:scanKeys.map(function(k){return scannerCounts[k];}),backgroundColor:CHART_COLORS.scannerBar,borderWidth:0,borderRadius:4}]},options:{indexAxis:'y',scales:{x:{grid:{color:App.gridColor},ticks:{font:{size:10},color:'#9CA3AF'}},y:{grid:{display:false},ticks:{font:{size:10},color:'#9CA3AF'}}},plugins:{legend:{display:false}}}});
       }
       var overlaps=DA.cross_scanner_redundancy||[];
-      if(App.hasChart&&App.$('c-dedup-overlap')){
+      if(typeof Chart!=='undefined'&&App.$('c-dedup-overlap')){
         if(overlaps.length>0){
           // Show canvas, remove any empty overlay
           var cv=App.$('c-dedup-overlap');
@@ -1175,6 +1374,53 @@ const App={
           if(par&&!par.querySelector('.empty-state-overlay')){var ov=document.createElement('div');ov.className='empty-state-overlay';ov.style.cssText='display:flex;align-items:center;justify-content:center;height:200px;color:var(--text-tertiary);font-size:var(--text-xs)';ov.textContent='No cross-scanner overlaps';par.appendChild(ov);}
         }
       }
+      // Dedup breakdown
+      var db=App.$('dedup-breakdown');
+      if(db){
+        var dedupPass=DA.dedup_by_pass||{};
+        var totalDedup=S.raw_findings-S.unique_findings;
+        var passNames={cve:'CVE matching',endpoint:'Endpoint + CWE',title:'Fuzzy title similarity'};
+        var passColors={cve:'var(--risk-critical)',endpoint:'var(--risk-high)',title:'var(--risk-medium)'};
+        var html='<div style="padding:var(--space-4)">';
+        html+='<div style="margin-bottom:var(--space-3)"><span style="font-size:var(--text-xs);color:var(--text-tertiary)">Total removed: </span><strong style="color:var(--text-primary)">'+totalDedup+'</strong> <span style="font-size:var(--text-xs);color:var(--text-tertiary)">findings</span></div>';
+        Object.keys(dedupPass).forEach(function(key){
+          var count=dedupPass[key];
+          var pct=totalDedup>0?((count/totalDedup)*100).toFixed(1):0;
+          var name=passNames[key]||key;
+          var color=passColors[key]||'var(--text-secondary)';
+          html+='<div style="display:flex;align-items:center;gap:var(--space-2);margin-bottom:var(--space-2)">';
+          html+='<div style="width:12px;height:12px;border-radius:3px;background:'+color+'"></div>';
+          html+='<span style="flex:1;font-size:var(--text-xs);color:var(--text-primary)">'+name+'</span>';
+          html+='<span style="font-size:var(--text-xs);font-weight:600;color:var(--text-primary)">'+count+'</span>';
+          html+='<span style="font-size:10px;color:var(--text-tertiary)">('+pct+'%)</span>';
+          html+='</div>';
+          // Bar
+          html+='<div style="height:4px;background:var(--border-subtle);border-radius:2px;margin-bottom:var(--space-2)"><div style="height:100%;width:'+pct+'%;background:'+color+';border-radius:2px"></div></div>';
+        });
+        html+='</div>';
+        db.innerHTML=html;
+      }
+      // Quarantine rules
+      var qr=App.$('dedup-quarantine');
+      if(qr){
+        var qRules=DA.quarantine_by_rule||{};
+        var totalQ=S.quarantined||0;
+        var html='<div style="padding:var(--space-4)">';
+        html+='<div style="margin-bottom:var(--space-3)"><span style="font-size:var(--text-xs);color:var(--text-tertiary)">Total quarantined: </span><strong style="color:var(--text-primary)">'+totalQ+'</strong> <span style="font-size:var(--text-xs);color:var(--text-tertiary)">findings</span></div>';
+        Object.keys(qRules).forEach(function(rule){
+          var count=qRules[rule];
+          var pct=totalQ>0?((count/totalQ)*100).toFixed(1):0;
+          html+='<div style="display:flex;align-items:center;gap:var(--space-2);margin-bottom:var(--space-2)">';
+          html+='<div style="width:12px;height:12px;border-radius:3px;background:var(--risk-info)"></div>';
+          html+='<span style="flex:1;font-size:var(--text-xs);color:var(--text-primary)">'+App.esc(rule)+'</span>';
+          html+='<span style="font-size:var(--text-xs);font-weight:600;color:var(--text-primary)">'+count+'</span>';
+          html+='<span style="font-size:10px;color:var(--text-tertiary)">('+pct+'%)</span>';
+          html+='</div>';
+          html+='<div style="height:4px;background:var(--border-subtle);border-radius:2px;margin-bottom:var(--space-2)"><div style="height:100%;width:'+pct+'%;background:var(--risk-info);border-radius:2px"></div></div>';
+        });
+        html+='</div>';
+        qr.innerHTML=html;
+      }
       // Overlap table
       var ot=App.$('dedup-overlap-table');
       if(ot&&overlaps.length>0){
@@ -1182,17 +1428,65 @@ const App={
           return '<tr><td>'+(o.cve?'<a class="cve-link" href="https://nvd.nist.gov/vuln/detail/'+App.esc(o.cve)+'" target="_blank">'+App.esc(o.cve)+'</a>':'<span class="dimmed">\u2014</span>')+'</td><td style="font-size:11px">'+(o.scanners_found_it||[]).join(', ')+'</td><td class="truncate" style="max-width:200px">'+App.esc(o.vulnerability||'\u2014')+'</td><td class="dimmed" style="font-size:11px">'+App.esc(o.product||'\u2014')+'</td></tr>';
         }).join('')+'</tbody></table>';
       }
+      // Wire removed-findings filters
+      App.dedup._removedPage=0;App.dedup._buildRemoved();App.dedup._renderRemoved();
+      var rsEl=App.$('removed-search');if(rsEl)rsEl.addEventListener('input',function(){App.dedup._removedPage=0;App.dedup._renderRemoved();});
+      var rpEl=App.$('removed-pass');if(rpEl)rpEl.addEventListener('change',function(){App.dedup._removedPage=0;App.dedup._renderRemoved();});
+    },
+    _buildRemoved(){
+      var list=[];
+      // Add quarantined findings
+      (App.data.quarantine||[]).forEach(function(f){list.push({product:f.product||'',scanner:f.scanner||'',title:f.title||'',severity:f.severity||'',cve:f.cve||'',cwe:f.cwe||'',reason:f.reason||'',pass:'quarantined'});});
+      // Add deduped (removed) findings from pipeline output
+      var DA=App.data.dedup_analytics||{};
+      (DA.removed_findings||[]).forEach(function(f){list.push({product:f.product||'',scanner:f.scanner||'',title:f.title||'',severity:f.severity||'',cve:f.cve||'',cwe:f.cwe||'',reason:f.duplicate_of?'Duplicate of '+f.duplicate_of:'',pass:f.pass||'cve'});});
+      App.dedup._allRemoved=list;
+      var cnt=App.$('removed-count');
+      if(cnt)cnt.textContent=list.length+' removed';
+    },
+    _renderRemoved(){
+      var list=App.dedup._allRemoved||[];
+      var search=(App.$('removed-search')||{}).value||'';
+      var pass=(App.$('removed-pass')||{}).value||'';
+      var filtered=list.filter(function(f){
+        if(pass&&f.pass!==pass)return false;
+        if(search){var s=search.toLowerCase();var hay=((f.title||'')+(f.cve||'')+(f.product||'')).toLowerCase();if(hay.indexOf(s)<0)return false;}
+        return true;
+      });
+      var PAGE_SIZE=50;var page=App.dedup._removedPage||0;var start=page*PAGE_SIZE;
+      var items=filtered.slice(start,start+PAGE_SIZE);
+      var el=App.$('removed-findings-list');var showing=App.$('removed-showing');
+      if(showing)showing.textContent='Showing '+(start+1)+'-'+Math.min(start+PAGE_SIZE,filtered.length)+' of '+filtered.length;
+      if(!el)return;
+      if(!items.length){el.innerHTML='<div class="empty-state" style="padding:var(--space-4)"><p class="empty-state-desc">No removed findings match filters</p></div>';return;}
+      var html='<table class="data-table"><thead><tr><th>Product</th><th>Scanner</th><th>Severity</th><th>Title</th><th>CVE</th><th>Reason</th></tr></thead><tbody>';
+      items.forEach(function(f){
+        html+='<tr><td style="font-size:11px">'+App.esc(f.product)+'</td><td style="font-size:11px">'+App.esc(f.scanner)+'</td><td><span class="badge '+App.sevClass(f.severity)+'" style="font-size:9px">'+App.esc(f.severity)+'</span></td><td class="truncate" style="max-width:200px;font-size:11px">'+App.esc(f.title.substring(0,80))+'</td><td style="font-size:11px">'+(f.cve?App.esc(f.cve):'<span class="dimmed">\u2014</span>')+'</td><td class="dimmed" style="font-size:10px">'+App.esc(f.reason||f.pass)+'</td></tr>';
+      });
+      html+='</tbody></table>';
+      el.innerHTML=html;
+      var totalPages=Math.ceil(filtered.length/PAGE_SIZE);
+      var pg=App.$('removed-pagination');
+      if(pg&&totalPages>1){var ph='';
+        if(page>0)ph+='<button class="btn btn-secondary btn-sm" onclick="App.dedup._removedPage--;App.dedup._renderRemoved()">Prev</button>';
+        ph+='<span style="font-size:var(--text-xs);color:var(--text-tertiary);padding:var(--space-2)">'+(page+1)+'/'+totalPages+'</span>';
+        if(page<totalPages-1)ph+='<button class="btn btn-secondary btn-sm" onclick="App.dedup._removedPage++;App.dedup._renderRemoved()">Next</button>';
+        pg.innerHTML=ph;}else if(pg){pg.innerHTML='';}
     }
   },
 
   /* ═══ INTEGRATIONS ═══ */
   integrations:{
     _fieldMap:[
-      {el:'ak-groq',key:'groq_api_key'},{el:'ak-nvd',key:'nvd_api_key'},
-      {el:'ak-github',key:'github_token'},{el:'ak-jira-url',key:'jira_url'},
-      {el:'ak-jira-user',key:'jira_user'},{el:'ak-jira-token',key:'jira_token'},
-      {el:'ak-jira-project',key:'jira_project'},{el:'ak-dd-url',key:'defectdojo_url'},
-      {el:'ak-dd-key',key:'defectdojo_api_key'}
+      {el:'ak-groq',key:'groq_api_key',group:'ai',label:'Groq API Key'},
+      {el:'ak-nvd',key:'nvd_api_key',group:'ai',label:'NVD API Key'},
+      {el:'ak-github',key:'github_token',group:'github',label:'GitHub Token'},
+      {el:'ak-jira-url',key:'jira_url',group:'jira',label:'Jira URL'},
+      {el:'ak-jira-user',key:'jira_user',group:'jira',label:'Jira User'},
+      {el:'ak-jira-token',key:'jira_token',group:'jira',label:'Jira Token'},
+      {el:'ak-jira-project',key:'jira_project',group:'jira',label:'Jira Project'},
+      {el:'ak-dd-url',key:'defectdojo_url',group:'dd',label:'DefectDojo URL'},
+      {el:'ak-dd-key',key:'defectdojo_api_key',group:'dd',label:'DefectDojo API Key'}
     ],
     _apiCall(action,endpoint,method,elId,successMsg,body){
       var el=App.$(elId);if(!el)return Promise.resolve();
@@ -1205,17 +1499,53 @@ const App={
         return data;
       }).catch(function(e){el.innerHTML='<span style="color:#EF4444">'+App.esc(e.message||'Network error')+'</span>';});
     },
+    loadKeys(){
+      var self=this;
+      App.apiFetch('/api/config/keys').then(function(data){
+        var keys=data.keys||{};
+        // Update status badges for each group
+        var groups={ai:['groq_api_key','nvd_api_key'],github:['github_token'],jira:['jira_url','jira_user','jira_token','jira_project'],dd:['defectdojo_url','defectdojo_api_key']};
+        Object.keys(groups).forEach(function(g){
+          var el=App.$('status-'+g);if(!el)return;
+          var groupKeys=groups[g];
+          var configured=groupKeys.some(function(k){return keys[k]&&keys[k].set;});
+          if(configured){
+            el.textContent='Configured';el.style.color='#22C55E';el.style.background='rgba(34,197,94,0.1)';el.style.border='1px solid rgba(34,197,94,0.3)';
+          }else{
+            el.textContent='Not configured';el.style.color='#6B7280';el.style.background='rgba(107,114,128,0.1)';el.style.border='1px solid rgba(107,114,128,0.3)';
+          }
+        });
+        // Pre-fill URL fields if configured (but not password fields for security)
+        self._fieldMap.forEach(function(f){
+          var el=App.$(f.el);if(!el)return;
+          if(keys[f.key]&&keys[f.key].set&&!el.value){
+            // For URL fields, show a hint that it's configured
+            if(f.el.includes('url')&&!el.value){el.placeholder='Already configured - enter new value to change';}
+          }
+        });
+      }).catch(function(){});
+    },
     saveKeys(){
       var keys={};
+      var overwrite=App.$('ak-overwrite')?App.$('ak-overwrite').checked:true;
       this._fieldMap.forEach(function(f){
         var val=App.$(f.el);
         if(val&&val.value&&val.value.trim())keys[f.key]=val.value.trim();
       });
-      return this._apiCall('Saving','/api/config/keys','POST','apikey-status',function(){return 'Saved! Restart server to apply.';},keys);
+      if(!Object.keys(keys).length){
+        var el=App.$('apikey-status');if(el){el.textContent='No keys to save';el.style.color='#F59E0B';}
+        return Promise.resolve();
+      }
+      keys.overwrite=overwrite;
+      var self=this;
+      return this._apiCall('Saving','/api/config/keys','POST','apikey-status',function(){
+        setTimeout(function(){self.loadKeys();},200); // Refresh status badges after save
+        return 'Keys saved and active!';
+      },keys);
     },
     testJira(){return this._apiCall('Testing','/api/jira/test','GET','jira-status',function(d){return d.connected?'Connected to '+App.esc(d.url||'Jira'):App.esc(d.error||'Not configured');});},
     createJira(){return this._apiCall('Creating','/api/jira/create?threshold=60','POST','jira-status',function(d){return 'Created '+(d.created||0)+' issues';});},
-    testDD(){return this._apiCall('Testing','/api/defectdojo/test','GET','dd-status',function(d){return d.connected?'Connected to '+App.esc(d.url||'DefectDojo'):App.esc(d.error||'Not configured');});},
+    testDD(){return this._apiCall('Testing','/api/defectdojo/test','POST','dd-status',function(d){return d.connected?'Connected to '+App.esc(d.url||'DefectDojo'):App.esc(d.error||'Not configured');});},
     importDD(){return this._apiCall('Importing','/api/defectdojo/import?product_name=all','POST','dd-status',function(d){return App.esc(d.message||'Imported');});}
   }
 };
@@ -1226,13 +1556,14 @@ window.addEventListener('beforeunload',function(){
   if(App.state.ws){App.state.ws.close();App.state.ws=null;}
 });
 
-if(document.readyState!=='loading'){App.init();}else{document.addEventListener('DOMContentLoaded',App.init);}
+if(document.readyState!=='loading'){App.init();}else{document.addEventListener('DOMContentLoaded',function(){App.init();});}
 </script>
 </body>
 </html>"""
 
 
 # ─────────────────────────── build dashboard ──────────────────────────────────
+
 
 def build_dashboard(
     path: str,
@@ -1244,15 +1575,22 @@ def build_dashboard(
     quarantine: List[Finding],
     executive_brief: str = "",
     products_config: Optional[Dict] = None,
+    removed_findings: Optional[List[Dict]] = None,
 ) -> None:
     """Write the self-contained HTML dashboard."""
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     # Load lifecycle data from DB
-    lifecycle_data = {"findings": [], "status_counts": {}, "overdue_count": 0, "overdue_findings": []}
-    lifecycle_db_path = os.path.join(os.path.dirname(path) or '.', 'lifecycle.db')
+    lifecycle_data = {
+        "findings": [],
+        "status_counts": {},
+        "overdue_count": 0,
+        "overdue_findings": [],
+    }
+    lifecycle_db_path = os.path.join(os.path.dirname(path) or ".", "lifecycle.db")
     if os.path.exists(lifecycle_db_path):
         try:
             from .lifecycle import LifecycleManager
+
             lc = LifecycleManager(lifecycle_db_path)
             lifecycle_data = lc.get_dashboard_data()
             lc.close()
@@ -1261,7 +1599,7 @@ def build_dashboard(
 
     # Load dedup analytics from noise_reduction.json
     dedup_analytics = {}
-    noise_json_path = os.path.join(os.path.dirname(path) or '.', 'noise_reduction.json')
+    noise_json_path = os.path.join(os.path.dirname(path) or ".", "noise_reduction.json")
     if os.path.exists(noise_json_path):
         try:
             with open(noise_json_path) as nf:
@@ -1281,14 +1619,123 @@ def build_dashboard(
         "dedup_analytics": dedup_analytics,
     }
     json_str = json.dumps(dash_data, ensure_ascii=True)
-    # Robust XSS prevention — escape all HTML-significant chars in JSON
+    # Prevent breaking out of <script> tags (still needed for type=application/json)
     json_str = json_str.replace("</script>", r"<\/script>")
     json_str = json_str.replace("</SCRIPT>", r"<\/SCRIPT>")
-    json_str = json_str.replace("<!--", r"<\!--")
-    json_str = json_str.replace("-->", r"--\>")
-    # Replace < with \u003c to prevent breaking out of script tags
-    # This replaces ALL < in JSON values -- safe for security data where < is rare
-    json_str = json_str.replace("<", "\\u003c")
     html = _HTML_TEMPLATE.replace("__DASH_JSON__", json_str)
     with open(path, "w", encoding="utf-8") as fh:
         fh.write(html)
+
+    # Vendor the JS libs next to the dashboard so it renders with zero
+    # network dependency (CDN availability must never gate rendering).
+    import shutil
+
+    static_src = os.path.join(os.path.dirname(__file__), "static")
+    static_dst = os.path.join(os.path.dirname(os.path.abspath(path)), "dash-static")
+    os.makedirs(static_dst, exist_ok=True)
+    for fname in ("chart.umd.min.js", "d3.min.js"):
+        src_file = os.path.join(static_src, fname)
+        dst_file = os.path.join(static_dst, fname)
+        if os.path.exists(src_file) and (
+            not os.path.exists(dst_file)
+            or os.path.getmtime(src_file) > os.path.getmtime(dst_file)
+        ):
+            shutil.copy2(src_file, dst_file)
+
+
+# ─────────────────────────── CLI ─────────────────────────────────────────────
+
+
+def _load_findings(path: str) -> List[Finding]:
+    """Reconstruct Finding objects from a ranked_findings.json file."""
+    with open(path, "r", encoding="utf-8") as fh:
+        items = json.load(fh)
+    return [Finding(**item) for item in items]
+
+
+def _derive_summary(all_findings: List[Finding], ranked: List[Finding]) -> RunSummary:
+    """Build a RunSummary from findings alone (standalone regeneration)."""
+    import datetime as _dt
+
+    active = [f for f in ranked if f.status == "active"]
+    scores = [f.score or 0 for f in active]
+    prios = {"Critical": 0, "High": 0, "Medium": 0, "Low": 0}
+    for f in active:
+        if f.priority in prios:
+            prios[f.priority] += 1
+    return RunSummary(
+        run_date=_dt.datetime.now().isoformat(timespec="seconds"),
+        products=sorted({f.product for f in ranked}),
+        raw_findings=len(all_findings),
+        unique_findings=len(all_findings),
+        quarantined=sum(1 for f in all_findings if f.status == "quarantined"),
+        final_findings=len(active),
+        dedup_pct=0.0,
+        avg_score=round(sum(scores) / len(scores), 1) if scores else 0.0,
+        top_score=max(scores) if scores else 0.0,
+        p1=prios["Critical"],
+        p2=prios["High"],
+        p3=prios["Medium"],
+        p4=prios["Low"],
+    )
+
+
+def main() -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Regenerate the HTML risk dashboard from pipeline output"
+    )
+    parser.add_argument(
+        "--findings", required=True, help="Path to ranked_findings.json"
+    )
+    parser.add_argument(
+        "--out", required=True, help="Output path for the HTML dashboard"
+    )
+    parser.add_argument(
+        "--config",
+        default="config.json",
+        help="config.json (used to rebuild attack paths)",
+    )
+    args = parser.parse_args()
+
+    all_findings = _load_findings(args.findings)
+    ranked = sorted(
+        (f for f in all_findings if f.status == "active"),
+        key=lambda f: (f.score or 0, f.kev),
+        reverse=True,
+    )
+    summary = _derive_summary(all_findings, ranked)
+
+    # Rebuild attack paths when config is available; degrade gracefully.
+    attack_paths: Dict[str, List] = {}
+    products_config: Dict = {}
+    try:
+        from .config import Config
+        from . import attackpath as _ap
+
+        cfg = Config.load(args.config)
+        products_config = cfg.products
+        for pid in summary.products:
+            pcfg = cfg.product(pid)
+            paths = _ap.build_attack_paths(ranked, pid, pcfg)
+            attack_paths[pid] = [p.to_dict() for p in paths]
+            _ap.attach_escalation_potential(ranked, paths, product=pid)
+    except FileNotFoundError:
+        print(f"  [WARN] {args.config} not found — attack paths omitted")
+
+    build_dashboard(
+        args.out,
+        all_findings,
+        ranked,
+        summary,
+        attack_paths,
+        history={},
+        quarantine=all_findings,
+        products_config=products_config,
+    )
+    print(f"Dashboard generated: {args.out}")
+
+
+if __name__ == "__main__":
+    main()

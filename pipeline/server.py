@@ -11,6 +11,7 @@ Usage:
     # or
     uvicorn pipeline.server:app --host 0.0.0.0 --port 8000 --reload
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -18,11 +19,9 @@ import json
 import os
 import re
 import stat
-import sys
 import threading
-import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set
 from urllib.parse import urlparse
 
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -31,23 +30,41 @@ from slowapi.errors import RateLimitExceeded
 
 from fastapi import (
     FastAPI,
+    Request,
     WebSocket,
     WebSocketDisconnect,
     HTTPException,
     Depends,
     Header,
-    Query,
 )
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator
 
-from .auth import create_token, verify_token, authenticate, _DEFAULT_USER
-from .scanner_manager import get_manager, ScannerStatus
+from .auth import create_token, verify_token, authenticate
+from .scanner_manager import get_manager, SCANNER_IMAGES
 from .config import Config
 
-# ─── App setup ───────────────────────────────────────────────────────────────
+# ─── Load .env into os.environ at startup ────────────────────────────────────────────────────────────────────────────────
+
+def _load_env_file():
+    """Load .env file into os.environ (does not override existing vars)."""
+    env_path = Path(".env")
+    if not env_path.exists():
+        return
+    with open(env_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            k, v = k.strip(), v.strip()
+            if k and (k not in os.environ or not os.environ[k]):  # Load if missing or empty
+                os.environ[k] = v
+
+_load_env_file()
+
+# ─── App setup ────────────────────────────────────────────────────────────
 
 app = FastAPI(
     title="DevSecOps Risk Intelligence Dashboard",
@@ -58,7 +75,7 @@ app = FastAPI(
 # CORS: restrict to known origins (set via env var)
 _ALLOWED_ORIGINS = os.environ.get(
     "ALLOWED_ORIGINS",
-    "http://localhost:8000,http://localhost:3000,http://127.0.0.1:8000"
+    "http://localhost:8000,http://localhost:3000,http://127.0.0.1:8000",
 ).split(",")
 
 app.add_middleware(
@@ -85,14 +102,16 @@ def _load_config() -> Config:
 
 
 def _save_config(cfg: Config):
-    """Save config back to file."""
-    with open(CONFIG_PATH, "w") as f:
-        json.dump(cfg._data, f, indent=2)
+    """Save config back to file atomically."""
+    cfg.save(CONFIG_PATH)
 
 
 # ─── Auth dependency ─────────────────────────────────────────────────────────
 
-async def get_current_user(request: Request, authorization: Optional[str] = Header(None)) -> str:
+
+async def get_current_user(
+    request: Request, authorization: Optional[str] = Header(None)
+) -> str:
     """Extract and verify JWT from cookie or Authorization header."""
     # Try cookie first
     token = request.cookies.get("access_token")
@@ -112,45 +131,60 @@ async def get_current_user(request: Request, authorization: Optional[str] = Head
 
 # ─── WebSocket manager ──────────────────────────────────────────────────────
 
+
 class ConnectionManager:
-    """Manages WebSocket connections for live updates."""
+    """Manages WebSocket connections for live updates (thread-safe)."""
 
     def __init__(self):
         self.active_connections: Set[WebSocket] = set()
+        self._lock = threading.Lock()
 
     async def connect(self, ws: WebSocket):
         await ws.accept()
-        self.active_connections.add(ws)
+        with self._lock:
+            self.active_connections.add(ws)
 
     def disconnect(self, ws: WebSocket):
-        self.active_connections.discard(ws)
+        with self._lock:
+            self.active_connections.discard(ws)
 
     async def broadcast(self, data: dict):
         dead = set()
-        for ws in self.active_connections:
+        with self._lock:
+            connections = list(self.active_connections)
+        for ws in connections:
             try:
                 await ws.send_json(data)
             except Exception:
                 dead.add(ws)
-        self.active_connections -= dead
+        if dead:
+            with self._lock:
+                self.active_connections -= dead
 
 
 ws_manager = ConnectionManager()
+_server_loop: Optional[asyncio.AbstractEventLoop] = None
+
+
+@app.on_event("startup")
+async def _capture_loop():
+    global _server_loop
+    _server_loop = asyncio.get_running_loop()
 
 
 # ─── Pydantic models ────────────────────────────────────────────────────────
-
-from fastapi import Request
 
 
 class LoginRequest(BaseModel):
     username: str
     password: str
 
+
 class LoginResponse(BaseModel):
     status: str = "ok"
     expires_in: int
     username: str
+
 
 class ProductCreate(BaseModel):
     product_id: str
@@ -166,26 +200,30 @@ class ProductCreate(BaseModel):
     trivy_image: str = ""
     scanners: Dict[str, str] = {}
 
-    @field_validator('product_id')
+    @field_validator("product_id")
     @classmethod
     def validate_product_id(cls, v):
-        if not re.match(r'^[a-zA-Z0-9_-]{1,64}$', v):
-            raise ValueError('product_id must be 1-64 alphanumeric chars, hyphens, or underscores')
+        if not re.match(r"^[a-zA-Z0-9_-]{1,64}$", v):
+            raise ValueError(
+                "product_id must be 1-64 alphanumeric chars, hyphens, or underscores"
+            )
         return v
 
-    @field_validator('url')
+    @field_validator("url")
     @classmethod
     def validate_url(cls, v):
         parsed = urlparse(v)
-        if parsed.scheme not in ('http', 'https'):
-            raise ValueError('URL must use http or https')
+        if parsed.scheme not in ("http", "https"):
+            raise ValueError("URL must use http or https")
         if not parsed.netloc:
-            raise ValueError('URL must have a valid host')
+            raise ValueError("URL must have a valid host")
         return v
+
 
 class ScanRequest(BaseModel):
     product: str
     scanners: Optional[List[str]] = None  # None = all configured
+
 
 class PipelineRequest(BaseModel):
     products: Optional[List[str]] = None
@@ -195,6 +233,7 @@ class PipelineRequest(BaseModel):
 
 # ─── Auth routes ─────────────────────────────────────────────────────────────
 
+
 @app.post("/api/login", response_model=LoginResponse)
 @limiter.limit("5/minute")
 async def login(request: Request, req: LoginRequest):
@@ -202,12 +241,15 @@ async def login(request: Request, req: LoginRequest):
     if not authenticate(req.username, req.password):
         raise HTTPException(status_code=401, detail="Invalid credentials")
     from .auth import _DEFAULT_TTL
+
     token = create_token(req.username, ttl_seconds=_DEFAULT_TTL)
-    response = JSONResponse(content={
-        "status": "ok",
-        "expires_in": _DEFAULT_TTL,
-        "username": req.username,
-    })
+    response = JSONResponse(
+        content={
+            "status": "ok",
+            "expires_in": _DEFAULT_TTL,
+            "username": req.username,
+        }
+    )
     response.set_cookie(
         key="access_token",
         value=token,
@@ -226,6 +268,7 @@ async def auth_me(user: str = Depends(get_current_user)):
 
 
 # ─── Product routes ──────────────────────────────────────────────────────────
+
 
 @app.get("/api/products")
 async def list_products(user: str = Depends(get_current_user)):
@@ -257,7 +300,7 @@ async def create_product(req: ProductCreate, user: str = Depends(get_current_use
 
     scanners = req.scanners
     if not scanners:
-        scanners = {"nuclei": req.url, "zap": req.url, "wapiti": req.url}
+        scanners = {"nuclei": req.url, "zap": req.url, "wapiti": req.url, "nmap": req.url}
         if req.trivy_image:
             scanners["trivy"] = req.trivy_image
 
@@ -274,7 +317,7 @@ async def create_product(req: ProductCreate, user: str = Depends(get_current_use
         "scanners": scanners,
     }
 
-    cfg._data.setdefault("products", {})[req.product_id] = product_data
+    cfg.data.setdefault("products", {})[req.product_id] = product_data
     _save_config(cfg)
 
     return {"status": "created", "product_id": req.product_id}
@@ -287,7 +330,7 @@ async def delete_product(product_id: str, user: str = Depends(get_current_user))
     if product_id not in cfg.products:
         raise HTTPException(status_code=404, detail="Product not found")
 
-    del cfg._data["products"][product_id]
+    del cfg.data["products"][product_id]
     _save_config(cfg)
 
     return {"status": "deleted", "product_id": product_id}
@@ -309,6 +352,7 @@ async def get_product(product_id: str, user: str = Depends(get_current_user)):
 
 # ─── Scanner routes ──────────────────────────────────────────────────────────
 
+
 @app.get("/api/scanners/status")
 async def scanner_status(user: str = Depends(get_current_user)):
     """Get Docker availability and scanner images status."""
@@ -317,7 +361,7 @@ async def scanner_status(user: str = Depends(get_current_user)):
 
     images_status = {}
     if docker_ok:
-        for name, image in manager.__class__.__dict__.get("SCANNER_IMAGES", {}).items():
+        for name, image in SCANNER_IMAGES.items():
             images_status[name] = {"image": image, "status": "available"}
 
     return {
@@ -344,8 +388,7 @@ async def start_scan(req: ScanRequest, user: str = Depends(get_current_user)):
         app_status = manager.check_app_status(url)
         if app_status["status"] == "down":
             raise HTTPException(
-                status_code=503,
-                detail=f"Target app is not reachable at {url}"
+                status_code=503, detail=f"Target app is not reachable at {url}"
             )
 
     jobs = manager.start_product_scans(
@@ -399,7 +442,7 @@ _pipeline_lock = threading.Lock()
 
 @app.post("/api/pipeline/run")
 async def run_pipeline(req: PipelineRequest, user: str = Depends(get_current_user)):
-    """Run the full 8-stage pipeline. Runs in background thread."""
+    """Run the full 9-stage pipeline. Runs in background thread."""
     if not _pipeline_lock.acquire(blocking=False):
         raise HTTPException(status_code=409, detail="Pipeline is already running")
 
@@ -409,6 +452,7 @@ async def run_pipeline(req: PipelineRequest, user: str = Depends(get_current_use
     def _run():
         try:
             from . import run as pipeline_run
+
             pipeline_run.run_pipeline(
                 reports_dir=manager.get_reports_dir(),
                 config=cfg,
@@ -436,6 +480,7 @@ async def pipeline_status(user: str = Depends(get_current_user)):
 
 # ─── GitHub ticket routes ────────────────────────────────────────────────────
 
+
 @app.post("/api/tickets/create")
 async def create_tickets(
     threshold: int = 60,
@@ -445,38 +490,65 @@ async def create_tickets(
     """Auto-create GitHub Issues for findings above threshold."""
     findings_path = "outputs/ranked_findings.json"
     if not os.path.exists(findings_path):
-        raise HTTPException(status_code=404, detail="No pipeline output found. Run pipeline first.")
+        raise HTTPException(
+            status_code=404, detail="No pipeline output found. Run pipeline first."
+        )
 
     cfg = _load_config()
-    products_config = cfg._data.get("products", {})
+    products_config = cfg.data.get("products", {})
 
     from . import github_tickets
+    from .models import Finding
 
-    results = {}
-    for product_id, product_cfg in products_config.items():
-        repo = product_cfg.get("github_repo", "")
-        if not repo:
-            continue
+    with open(findings_path, "r", encoding="utf-8") as fh:
+        data = json.load(fh)
 
+    findings = []
+    for item in data:
+        f = Finding(**{k: v for k, v in item.items() if k != "raw"})
+        f.score_breakdown = item.get("score_breakdown", {})
+        f.remediation_suggestions = item.get("remediation_suggestions", [])
+        findings.append(f)
+
+    token = os.environ.get("GITHUB_TOKEN", "")
+    if not token and not dry_run:
+        raise HTTPException(status_code=400, detail="GITHUB_TOKEN not configured")
+
+    labels = cfg.data.get("reporting", {}).get(
+        "github_labels", ["security", "auto-generated"]
+    )
+
+    # Lifecycle-gated ticketing when the tracking DB exists
+    lifecycle_mgr = None
+    if os.path.exists("outputs/lifecycle.db"):
+        from .lifecycle import LifecycleManager
+
+        lifecycle_mgr = LifecycleManager("outputs/lifecycle.db")
+    try:
         result = github_tickets.create_tickets_per_product(
-            findings_path=findings_path,
+            findings=findings,
             products_config=products_config,
-            product_id=product_id,
-            repo=repo,
-            threshold=threshold,
+            token=token,
+            threshold=float(threshold),
+            labels=labels,
             dry_run=dry_run,
+            lifecycle=lifecycle_mgr,
         )
-        results[product_id] = result
+    finally:
+        if lifecycle_mgr is not None:
+            lifecycle_mgr.close()
 
-    return {"results": results, "dry_run": dry_run}
+    return {"results": result, "dry_run": dry_run}
 
 
 # ─── Lifecycle routes ─────────────────────────────────────────────────────
+
 
 @app.get("/api/lifecycle/dashboard")
 async def lifecycle_dashboard(user: str = Depends(get_current_user)):
     """Get lifecycle dashboard data."""
     from .lifecycle import LifecycleManager
+
     lc = LifecycleManager("outputs/lifecycle.db")
     data = lc.get_dashboard_data()
     lc.close()
@@ -487,6 +559,7 @@ async def lifecycle_dashboard(user: str = Depends(get_current_user)):
 async def lifecycle_overdue(user: str = Depends(get_current_user)):
     """Get overdue findings (SLA breached)."""
     from .lifecycle import LifecycleManager
+
     lc = LifecycleManager("outputs/lifecycle.db")
     data = lc.get_overdue_summary()
     lc.close()
@@ -494,9 +567,15 @@ async def lifecycle_overdue(user: str = Depends(get_current_user)):
 
 
 @app.post("/api/lifecycle/{finding_id}/transition")
-async def lifecycle_transition(finding_id: str, status: str, reason: str = "", user: str = Depends(get_current_user)):
+async def lifecycle_transition(
+    finding_id: str,
+    status: str,
+    reason: str = "",
+    user: str = Depends(get_current_user),
+):
     """Transition a finding's lifecycle status."""
     from .lifecycle import LifecycleManager
+
     lc = LifecycleManager("outputs/lifecycle.db")
     ok = lc.transition_status(finding_id, status, reason)
     lc.close()
@@ -506,6 +585,7 @@ async def lifecycle_transition(finding_id: str, status: str, reason: str = "", u
 
 
 # ─── API Key Management ────────────────────────────────────────────────────
+
 
 class ApiKeysUpdate(BaseModel):
     groq_api_key: Optional[str] = None
@@ -517,6 +597,7 @@ class ApiKeysUpdate(BaseModel):
     jira_project: Optional[str] = None
     defectdojo_url: Optional[str] = None
     defectdojo_api_key: Optional[str] = None
+    overwrite: Optional[bool] = True  # Default: overwrite existing keys
 
 
 @app.get("/api/config/keys")
@@ -531,11 +612,8 @@ async def get_config_keys(user: str = Depends(get_current_user)):
                 if line and not line.startswith("#") and "=" in line:
                     k, v = line.split("=", 1)
                     k = k.strip()
-                    # Mask sensitive values
-                    if v.strip() and len(v.strip()) > 4:
-                        keys[k] = v.strip()[:4] + "*" * (len(v.strip()) - 4)
-                    else:
-                        keys[k] = v.strip() if v.strip() else ""
+                    v = v.strip()
+                    keys[k] = {"set": bool(v), "length": len(v) if v else 0}
     return {"keys": keys}
 
 
@@ -553,33 +631,67 @@ async def update_config_keys(req: ApiKeysUpdate, user: str = Depends(get_current
                     existing[k.strip()] = v.strip()
 
     # Update only provided keys
-    updates = req.dict(exclude_none=True)
-    for k, v in updates.items():
-        env_key = k.upper()
+    data = req.model_dump(exclude_none=True)
+    overwrite = data.pop("overwrite", True)  # Extract overwrite flag
+    # Pydantic camelCase -> UPPER_SNAKE_CASE mapping
+    key_map = {
+        "groq_api_key": "GROQ_API_KEY",
+        "nvd_api_key": "NVD_API_KEY",
+        "github_token": "GITHUB_TOKEN",
+        "jira_url": "JIRA_URL",
+        "jira_user": "JIRA_USER",
+        "jira_token": "JIRA_TOKEN",
+        "jira_project": "JIRA_PROJECT",
+        "defectdojo_url": "DEFECTDOJO_URL",
+        "defectdojo_api_key": "DEFECTDOJO_API_KEY",
+    }
+    for k, v in data.items():
+        env_key = key_map.get(k, k.upper())
         if v:  # Only update if value is non-empty
-            existing[env_key] = v
+            if overwrite or env_key not in existing:
+                existing[env_key] = v
 
-    # Write back
-    with open(env_path, "w") as f:
-        for k, v in existing.items():
-            f.write(f"{k}={v}\n")
-    os.chmod(env_path, stat.S_IRUSR | stat.S_IWUSR)  # 0o600 — owner read/write only
+    # Write back atomically via temp file + rename
+    import tempfile
 
-    return {"status": "updated", "keys_updated": list(updates.keys())}
+    fd, tmp_path = tempfile.mkstemp(
+        dir=os.path.dirname(env_path) or ".", suffix=".env.tmp"
+    )
+    try:
+        with os.fdopen(fd, "w") as f:
+            for k, v in existing.items():
+                f.write(f"{k}={v}\n")
+        os.replace(tmp_path, env_path)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+    try:
+        os.chmod(env_path, stat.S_IRUSR | stat.S_IWUSR)  # 0o600 — owner read/write only
+    except OSError:
+        pass  # no-op on Windows
+
+    # Hot-reload: update os.environ so changes take effect immediately
+    for k, v in existing.items():
+        if v:
+            os.environ[k] = v
+
+    return {"status": "updated", "keys_updated": list(data.keys())}
 
 
 @app.get("/api/config")
 async def get_config(user: str = Depends(get_current_user)):
     """Get full config (products, scoring, etc.)."""
     cfg = _load_config()
-    return cfg._data
+    return cfg.data
 
 
 class ConfigUpdate(BaseModel):
     scoring_weights: Optional[dict] = None
     sla_days: Optional[dict] = None
     quarantine_rules: Optional[list] = None
-    max_risk_per_scanner: Optional[dict] = None
 
 
 @app.post("/api/config")
@@ -588,15 +700,20 @@ async def update_config(req: ConfigUpdate, user: str = Depends(get_current_user)
     cfg = _load_config()
     updates = req.model_dump(exclude_none=True)
     for key, value in updates.items():
-        if key in cfg._data and isinstance(value, dict) and isinstance(cfg._data[key], dict):
-            cfg._data[key].update(value)
+        if (
+            key in cfg.data
+            and isinstance(value, dict)
+            and isinstance(cfg.data[key], dict)
+        ):
+            cfg.data[key].update(value)
         else:
-            cfg._data[key] = value
+            cfg.data[key] = value
     _save_config(cfg)
     return {"status": "updated"}
 
 
 # ─── Export routes ─────────────────────────────────────────────────────────
+
 
 @app.get("/api/exports/sarif")
 async def export_sarif(user: str = Depends(get_current_user)):
@@ -622,15 +739,19 @@ async def export_defectdojo(user: str = Depends(get_current_user)):
     path = "outputs/defectdojo_import.json"
     if not os.path.exists(path):
         raise HTTPException(status_code=404, detail="Run pipeline first")
-    return FileResponse(path, media_type="application/json", filename="defectdojo_import.json")
+    return FileResponse(
+        path, media_type="application/json", filename="defectdojo_import.json"
+    )
 
 
 # ─── Jira routes ───────────────────────────────────────────────────────────
+
 
 @app.post("/api/jira/test")
 async def jira_test(user: str = Depends(get_current_user)):
     """Test Jira connection."""
     from .jira_client import JiraClient
+
     client = JiraClient()
     return client.test_connection()
 
@@ -639,24 +760,38 @@ async def jira_test(user: str = Depends(get_current_user)):
 async def jira_create(threshold: int = 60, user: str = Depends(get_current_user)):
     """Create Jira Issues for findings above threshold."""
     from .jira_client import JiraClient
+
     client = JiraClient()
     if not client.configured:
-        raise HTTPException(status_code=400, detail="Jira not configured. Set JIRA_URL, JIRA_USER, JIRA_TOKEN, JIRA_PROJECT")
+        raise HTTPException(
+            status_code=400,
+            detail="Jira not configured. Set JIRA_URL, JIRA_USER, JIRA_TOKEN, JIRA_PROJECT",
+        )
 
     findings_path = "outputs/ranked_findings.json"
     if not os.path.exists(findings_path):
         raise HTTPException(status_code=404, detail="No pipeline output found")
 
     import json as _json
+
     with open(findings_path) as fh:
         data = _json.load(fh)
     from .models import Finding
-    findings = [Finding(
-        scanner=r.get("scanner", ""), product=r.get("product", ""),
-        title=r.get("title", ""), severity=r.get("severity", "info"),
-        cve=r.get("cve"), cwe=r.get("cwe"), endpoint=r.get("endpoint"),
-        score=r.get("score"), priority=r.get("priority"),
-    ) for r in data]
+
+    findings = [
+        Finding(
+            scanner=r.get("scanner", ""),
+            product=r.get("product", ""),
+            title=r.get("title", ""),
+            severity=r.get("severity", "info"),
+            cve=r.get("cve"),
+            cwe=r.get("cwe"),
+            endpoint=r.get("endpoint"),
+            score=r.get("score"),
+            priority=r.get("priority"),
+        )
+        for r in data
+    ]
 
     result = client.create_issues_bulk(findings)
     return result
@@ -664,10 +799,12 @@ async def jira_create(threshold: int = 60, user: str = Depends(get_current_user)
 
 # ─── DefectDojo routes ─────────────────────────────────────────────────────
 
+
 @app.post("/api/defectdojo/test")
 async def defectdojo_test(user: str = Depends(get_current_user)):
     """Test DefectDojo connection."""
     from .defectdojo_client import DefectDojoClient
+
     client = DefectDojoClient()
     return client.test_connection()
 
@@ -677,9 +814,13 @@ async def defectdojo_import(product_name: str, user: str = Depends(get_current_u
     """Import findings into DefectDojo."""
     from .defectdojo_client import DefectDojoClient
     from .defectdojo_client import import_to_defectdojo
+
     client = DefectDojoClient()
     if not client.configured:
-        raise HTTPException(status_code=400, detail="DefectDojo not configured. Set DEFECTDOJO_URL and DEFECTDOJO_API_KEY")
+        raise HTTPException(
+            status_code=400,
+            detail="DefectDojo not configured. Set DEFECTDOJO_URL and DEFECTDOJO_API_KEY",
+        )
 
     findings_path = "outputs/ranked_findings.json"
     if not os.path.exists(findings_path):
@@ -687,19 +828,29 @@ async def defectdojo_import(product_name: str, user: str = Depends(get_current_u
 
     import json as _json
     from .models import Finding
+
     with open(findings_path) as fh:
         data = _json.load(fh)
-    findings = [Finding(
-        scanner=r.get("scanner", ""), product=r.get("product", ""),
-        title=r.get("title", ""), severity=r.get("severity", "info"),
-        cve=r.get("cve"), cwe=r.get("cwe"), endpoint=r.get("endpoint"),
-        score=r.get("score"), description=r.get("description", ""),
-    ) for r in data]
+    findings = [
+        Finding(
+            scanner=r.get("scanner", ""),
+            product=r.get("product", ""),
+            title=r.get("title", ""),
+            severity=r.get("severity", "info"),
+            cve=r.get("cve"),
+            cwe=r.get("cwe"),
+            endpoint=r.get("endpoint"),
+            score=r.get("score"),
+            description=r.get("description", ""),
+        )
+        for r in data
+    ]
 
     return import_to_defectdojo(findings, product_name)
 
 
 # ─── Dedup analytics ────────────────────────────────────────────────────────
+
 
 @app.get("/api/analytics/dedup")
 async def dedup_analytics(user: str = Depends(get_current_user)):
@@ -724,6 +875,7 @@ async def dedup_analytics(user: str = Depends(get_current_user)):
 async def lifecycle_all_findings(user: str = Depends(get_current_user)):
     """Get all findings with lifecycle status."""
     from .lifecycle import LifecycleManager
+
     lc = LifecycleManager("outputs/lifecycle.db")
     data = lc.get_dashboard_data()
     lc.close()
@@ -734,6 +886,7 @@ async def lifecycle_all_findings(user: str = Depends(get_current_user)):
 async def lifecycle_breached(user: str = Depends(get_current_user)):
     """Get SLA-breached findings."""
     from .lifecycle import LifecycleManager
+
     lc = LifecycleManager("outputs/lifecycle.db")
     data = lc.get_overdue_summary()
     lc.close()
@@ -742,70 +895,57 @@ async def lifecycle_breached(user: str = Depends(get_current_user)):
 
 # ─── WebSocket for live updates ──────────────────────────────────────────────
 
+
 @app.websocket("/ws/live")
 async def websocket_live(ws: WebSocket):
     """WebSocket endpoint for real-time scanner progress updates."""
-    # Verify token BEFORE accept (C21 fix)
-    token = ws.query_params.get("token", "")
+    token = ws.query_params.get("token", "") or ws.cookies.get("access_token", "")
     if not token:
-        # Try cookie
-        token = ws.cookies.get("access_token", "")
-    if token:
-        payload = verify_token(token)
-        if not payload:
-            await ws.close(code=4001, reason="Invalid token")
-            return
-    else:
-        await ws.close(code=4001, reason="Missing token")
+        await ws.close(code=4001, reason="Missing authentication token")
+        return
+    payload = verify_token(token)
+    if not payload:
+        await ws.close(code=4001, reason="Invalid or expired token")
         return
 
     await ws_manager.connect(ws)
     manager = get_manager()
 
-    # Register callback for live updates
     def on_job_update(job):
-        data = {
-            "type": "scan_update",
-            "data": job.to_dict(),
-        }
-        asyncio.run_coroutine_threadsafe(
-            ws_manager.broadcast(data),
-            asyncio.get_event_loop() if asyncio.get_event_loop().is_running() else None,
-        )
+        if ws not in ws_manager.active_connections:
+            return
+        data = {"type": "scan_update", "data": job.to_dict()}
+        if _server_loop and _server_loop.is_running():
+            asyncio.run_coroutine_threadsafe(
+                ws_manager.broadcast(data),
+                _server_loop,
+            )
 
     manager.on_status_change(on_job_update)
 
     try:
         while True:
-            # Keep connection alive, handle client messages
             data = await ws.receive_text()
-            # Safe JSON parsing with size limit (Issue 5)
-            if len(data.encode('utf-8')) > 4096:
+            if len(data.encode("utf-8")) > 4096:
                 await ws.send_json({"type": "error", "data": "Payload too large"})
                 continue
             msg = json.loads(data)
-
             if msg.get("type") == "ping":
                 await ws.send_json({"type": "pong"})
-
             elif msg.get("type") == "get_status":
-                await ws.send_json({
-                    "type": "status",
-                    "data": manager.get_job_summary(),
-                })
-
+                await ws.send_json(
+                    {"type": "status", "data": manager.get_job_summary()}
+                )
     except WebSocketDisconnect:
-        ws_manager.disconnect(ws)
+        pass
     except Exception:
+        pass
+    finally:
+        manager.off_status_change(on_job_update)
         ws_manager.disconnect(ws)
 
 
 # ─── Dashboard static file ──────────────────────────────────────────────────
-
-@app.get("/", response_class=HTMLResponse)
-async def serve_root():
-    """Root route — redirect to login if no token, dashboard otherwise."""
-    return HTMLResponse(_LOGIN_HTML)
 
 
 @app.get("/login", response_class=HTMLResponse)
@@ -814,22 +954,43 @@ async def serve_login():
     return HTMLResponse(_LOGIN_HTML)
 
 
-@app.get("/home", response_class=HTMLResponse)
-async def serve_home():
-    """Home redirects to dashboard."""
-    return HTMLResponse(_LOGIN_HTML)
+@app.get("/", response_class=HTMLResponse)
+@app.get("/{page}", response_class=HTMLResponse)
+async def serve_dashboard(request: Request, page: str = "overview"):
+    """Serve the main dashboard HTML — requires valid JWT cookie.
 
-
-@app.get("/dashboard", response_class=HTMLResponse)
-async def serve_dashboard():
-    """Serve the main dashboard HTML."""
+    Routes: / = overview, /findings, /dedup, /lifecycle, etc.
+    """
+    # Skip API and static routes
+    if page.startswith("api") or page.startswith("dash-static") or page == "login":
+        raise HTTPException(status_code=404, detail="Not found")
+    token = request.cookies.get("access_token", "")
+    if not token or not verify_token(token):
+        return HTMLResponse(_LOGIN_HTML, status_code=302, headers={"Location": "/login"})
     ALLOWED_DIR = Path("outputs").resolve()
     dashboard_path = (ALLOWED_DIR / "risk_dashboard.html").resolve()
     if not dashboard_path.is_relative_to(ALLOWED_DIR):
         raise HTTPException(status_code=403, detail="Access denied")
     if dashboard_path.exists():
-        return FileResponse(str(dashboard_path))
+        return FileResponse(str(dashboard_path), headers={"Cache-Control": "no-store"})
     return HTMLResponse(_LOGIN_HTML)
+
+
+@app.get("/dash-static/{fname}")
+async def serve_dash_static(fname: str):
+    """Vendored JS libraries for the dashboard (no CDN dependency)."""
+    if "/" in fname or "\\" in fname or ".." in fname:
+        raise HTTPException(status_code=403, detail="Access denied")
+    static_dir = (Path(__file__).parent / "static").resolve()
+    fpath = (static_dir / fname).resolve()
+    if not fpath.is_relative_to(static_dir) or not fpath.exists():
+        raise HTTPException(status_code=404, detail="Not found")
+    media = "application/javascript" if fname.endswith(".js") else "text/plain"
+    return FileResponse(
+        str(fpath),
+        media_type=media,
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
 
 
 @app.get("/api/health")
@@ -913,7 +1074,7 @@ document.getElementById('login-form').addEventListener('submit', async(e)=>{
     });
     const data=await resp.json();
     if(!resp.ok)throw new Error(data.detail||'Login failed');
-    window.location.href='/dashboard';
+    window.location.href='/';
   }catch(e){err.textContent=e.message;err.style.display='block';}
   finally{btn.disabled=false;btn.textContent='Sign In';}
 });
@@ -924,9 +1085,11 @@ document.getElementById('login-form').addEventListener('submit', async(e)=>{
 
 # ─── Entry point ─────────────────────────────────────────────────────────────
 
+
 def _get_local_ip():
     """Get the LAN IP address for network access."""
     import socket
+
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.connect(("8.8.8.8", 80))
@@ -940,6 +1103,12 @@ def _get_local_ip():
 def main():
     """Run the server."""
     import uvicorn
+    from .auth import _init_password
+
+    # Generate fresh password and write to .env
+    _init_password()
+    from .auth import _GENERATED_PASS
+
     port = int(os.environ.get("PORT", "8000"))
     local_ip = _get_local_ip()
     print("")
@@ -962,7 +1131,7 @@ def main():
     print(f"    Network:  http://{local_ip}:{port}")
     print(f"    API Docs: http://localhost:{port}/docs")
     print("")
-    print(f"  Login: admin / DASHBOARD_PASS (see env var)")
+    print(f"  Login: admin / {_GENERATED_PASS}")
     print("  " + "=" * 56)
     print("")
     uvicorn.run(

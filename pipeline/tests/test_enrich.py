@@ -1,5 +1,4 @@
 """Unit tests for threat intelligence enrichment."""
-import os
 import tempfile
 import unittest
 

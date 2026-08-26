@@ -3,45 +3,71 @@ services:
     image: mongo:4.4
     container_name: nodegoat-mongo
     ports:
-      - "27017:27017"
+      - "127.0.0.1:27017:27017"
     volumes:
       - nodegoat-mongo-data:/data/db
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      test: ["CMD", "mongo", "--eval", "db.adminCommand('ping')"]
       interval: 5s
-      timeout: 3s
+      timeout: 5s
       retries: 10
 
   nodegoat:
-    image: nodegoat-web:latest
+    build:
+      context: https://github.com/OWASP/NodeGoat.git
+      dockerfile: Dockerfile
     container_name: nodegoat
     ports:
-      - "4000:4000"
+      - "127.0.0.1:4000:4000"
+    command: npm start
     environment:
       - NODE_ENV=development
       - MONGODB_URI=mongodb://nodegoat-mongo:27017/nodegoat
     depends_on:
       nodegoat-mongo:
         condition: service_healthy
-    working_dir: /home/node/app
-    command: node server.js
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"require('http').get('http://127.0.0.1:4000/',r=>process.exit(r.statusCode<500?0:1)).on('error',()=>process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
     restart: unless-stopped
 
   juiceshop:
     image: bkimminich/juice-shop:v15.3.0  # Pin to specific version (not :latest)
     container_name: juiceshop
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
+    healthcheck:
+      # Distroless image: no shell, node lives at /nodejs/bin/node (nonroot)
+      test: ["CMD", "/nodejs/bin/node", "-e", "require('http').get('http://127.0.0.1:3000/',r=>process.exit(r.statusCode<500?0:1)).on('error',()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
     restart: unless-stopped
 
   bwapp:
-    image: raesene/bwapp:latest  # Note: no versioned tags available for bWAPP
+    image: raesene/bwapp:latest
     container_name: bwapp
     ports:
-      - "8080:80"
+      - "127.0.0.1:8080:80"
     environment:
       - MYSQL_ROOT_PASSWORD=bug
+      - APACHE_RUN_USER=www-data
+      - APACHE_RUN_GROUP=www-data
+      - APACHE_LOG_DIR=/var/log/apache2
+      - APACHE_LOCK_DIR=/var/run/apache2
+      - APACHE_PID_FILE=/var/run/apache2/apache2.pid
+    healthcheck:
+      # No curl/wget in image; /dev/tcp needs bash (dash's /bin/sh lacks it)
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/80'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
     restart: unless-stopped
 
 volumes:
