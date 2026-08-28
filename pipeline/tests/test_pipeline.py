@@ -74,7 +74,7 @@ class TestPipeline(unittest.TestCase):
                                                   "control_effectiveness": 2}},
                              "enrich": {"cache_dir": os.path.join(td, "cache")}})
             result = run_pipeline(td, config, out, products=["app"],
-                                  skip_enrich=False, skip_ai=True,
+                                  skip_ai=True,
                                   use_searchsploit=False,
                                   fetcher=FakeFetcher())
 

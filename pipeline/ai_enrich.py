@@ -516,10 +516,28 @@ def _executive_brief(ranked: List[Finding], summary_stats: Dict) -> str:
             f'Top risk: "{top.title}" ({top.severity}, score {top.score}/100){kev}{exploit}.'
         )
 
+    # Count by exploitation risk (EPSS-based)
+    risk = {"high": 0, "medium": 0, "low": 0, "none": 0}
+    for f in ranked:
+        prob = f.epss_score or 0
+        if prob >= 0.4:
+            risk["high"] += 1
+        elif prob >= 0.1:
+            risk["medium"] += 1
+        elif prob > 0:
+            risk["low"] += 1
+        else:
+            risk["none"] += 1
+
+    kev_count = sum(1 for f in ranked if f.kev)
+    exploit_count = sum(1 for f in ranked if f.exploit_available)
+
     return (
         f"Analyzed {total} findings → {unique} unique → "
         f"{active} actionable ({noise_pct}% noise removed). "
         f"Critical: {sev['critical']}, High: {sev['high']}, Medium: {sev['medium']}, Low: {sev['low']}. "
+        f"Exploitation risk: {risk['high']} high (EPSS ≥40%), {risk['medium']} medium. "
+        f"KEV: {kev_count}, Exploit-DB: {exploit_count}. "
         f"{top_line or 'No active findings.'}"
     )
 

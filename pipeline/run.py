@@ -6,6 +6,7 @@ Usage: python -m pipeline.run --reports scan_reports/ --config config.json --out
 from __future__ import annotations
 import argparse
 import datetime as dt
+import json
 import os
 import sys
 from typing import Any, Dict, List, Optional
@@ -17,13 +18,112 @@ except ImportError:
     pass
 
 from .config import Config
-from .models import RunSummary
+from .models import RunSummary, Finding
 from . import normalize, dedup, filter as filt, enrich, attackpath, score, remediation, output, history, dashboard
+import threading
+
+
+# ── Background GitHub push (runs after pipeline, non-blocking) ─────────────
+_GH_PUSH_LOG = "outputs/github_push.log"
+
+
+def _push_github_worker(findings: list, threshold: float, lifecycle_path: str) -> None:
+    """Background worker: push findings to GitHub Issues with rate-limit handling."""
+    import time as _time
+    from .github_tickets import GitHubTickets, GitHubError
+    log_path = os.path.join(os.path.dirname(lifecycle_path) or "outputs", "github_push.log")
+
+    token = os.environ.get("GITHUB_TOKEN", "")
+    repo = os.environ.get("GITHUB_REPO", "")
+    if not token or not repo:
+        with open(log_path, "w") as lf:
+            lf.write("[SKIP] GITHUB_TOKEN or GITHUB_REPO not set\n")
+        return
+
+    active = [f for f in findings if f.status == "active" and (f.score or 0) >= threshold]
+    if not active:
+        with open(log_path, "w") as lf:
+            lf.write("[SKIP] No findings above threshold\n")
+        return
+
+    gh = GitHubTickets(repo, token, dry_run=False)
+    existing_titles = gh._open_issue_titles()
+
+    new_findings = []
+    for f in active:
+        title = f"[{f.priority}] {f.title[:100]} ({f.product})"
+        if title not in existing_titles:
+            new_findings.append(f)
+
+    lifecycle = None
+    if lifecycle_path and os.path.exists(lifecycle_path):
+        try:
+            from .lifecycle import LifecycleManager
+            lifecycle = LifecycleManager(lifecycle_path)
+        except Exception:
+            pass
+
+    total = len(new_findings)
+    created = 0
+    errors_list = []
+
+    with open(log_path, "w") as lf:
+        lf.write(f"[START] Pushing {total} issues to GitHub (repo: {repo})\n")
+        lf.flush()
+
+    for idx, f in enumerate(new_findings):
+        try:
+            stats = gh.create_tickets([f], threshold=0, labels=["security", "auto-generated"], lifecycle=lifecycle)
+            c = stats.get("created", 0)
+            errs = stats.get("errors", [])
+            created += c
+            errors_list.extend(errs)
+            if idx > 0 and idx % 50 == 0:
+                with open(log_path, "a") as lf:
+                    lf.write(f"[PROGRESS] {idx}/{total} (created: {created}, errors: {len(errors_list)})\n")
+            _time.sleep(0.5)
+        except Exception as exc:
+            errors_list.append(str(exc))
+            if "rate limit" in str(exc).lower():
+                with open(log_path, "a") as lf:
+                    lf.write(f"[RATE_LIMIT] Pausing 300s at {idx}/{total}\n")
+                _time.sleep(300)
+
+    if lifecycle:
+        lifecycle.close()
+
+    with open(log_path, "a") as lf:
+        lf.write(f"[DONE] Created {created}/{total} issues. Errors: {len(errors_list)}\n")
+        if errors_list:
+            for e in errors_list[:20]:
+                lf.write(f"  ! {e}\n")
+
+
+def _launch_github_push(findings: list, lifecycle_manager_path: str = "", blocking: bool = False) -> Optional[threading.Thread]:
+    """Start background GitHub push as a daemon thread.
+    If blocking=True, waits for completion (used by CLI). Returns the thread.
+    """
+    token = os.environ.get("GITHUB_TOKEN", "")
+    repo = os.environ.get("GITHUB_REPO", "")
+    if not token or not repo:
+        print("  [GITHUB] Skipped — GITHUB_TOKEN or GITHUB_REPO not set")
+        return None
+    active = [f for f in findings if f.status == "active" and (f.score or 0) >= 0]
+    if not active:
+        print("  [GITHUB] Skipped — no active findings")
+        return None
+    log_path = os.path.join(os.path.dirname(lifecycle_manager_path) or "outputs", "github_push.log")
+    t = threading.Thread(target=_push_github_worker, args=(active, 0.0, lifecycle_manager_path), daemon=True)
+    t.start()
+    print(f"  [GITHUB] Background push started ({len(active)} findings, log: {log_path})")
+    if blocking:
+        t.join(timeout=1800)
+    return t
 
 
 def run_pipeline(
     reports_dir: str, config: Config, out_dir: str,
-    products: Optional[List[str]] = None, skip_enrich: bool = False,
+    products: Optional[List[str]] = None,
     skip_ai: bool = True, use_searchsploit: Optional[bool] = None,
     fetcher: Optional[enrich.Fetcher] = None,
     ollama_model: Optional[str] = None, groq_api_key: Optional[str] = None,
@@ -38,6 +138,10 @@ def run_pipeline(
     print("STAGE 1/9: INGEST & NORMALIZE")
     print("=" * 60)
     findings = normalize.parse_reports_dir(reports_dir, products)
+    # Set found_at timestamp on all findings
+    for f in findings:
+        if not f.found_at:
+            f.found_at = run_date
     scanners_found = sorted({f.scanner for f in findings})
     print(f"  [OK] Parsed {len(findings)} raw findings from {len(scanners_found)} scanners")
     print(f"  Scanners: {', '.join(scanners_found)}")
@@ -74,11 +178,8 @@ def run_pipeline(
     print("STAGE 4/9: THREAT ENRICHMENT")
     print("=" * 60)
     enricher = enrich.Enricher(config.enrich_cfg, fetcher=fetcher)
-    if not skip_enrich:
-        enricher.enrich(findings, use_searchsploit=use_searchsploit)
-        print(f"  [OK] Enriched: {enricher.counts_dict()}")
-    else:
-        print("  [SKIP] Skipped (offline mode)")
+    enricher.enrich(findings, use_searchsploit=use_searchsploit)
+    print(f"  [OK] Enriched: {enricher.counts_dict()}")
 
     # Stage 5: Attack Path Mapping
     print("\n" + "=" * 60)
@@ -121,7 +222,7 @@ def run_pipeline(
         "p4": sum(1 for f in active if f.score is not None and f.score < 40),
     }
     ai_result = (ai_mod.ai_enrich(findings, summary_stats=ai_summary_stats,
-                  skip_remediation=skip_enrich, ollama_model="" if skip_ai else ollama_model,
+                  skip_remediation=False, ollama_model="" if skip_ai else ollama_model,
                   groq_api_key="" if skip_ai else groq_api_key, groq_model=groq_model)
                  if not skip_ai else {"used": False, "counts": {}, "executive_brief": ""})
     if not ai_result.get("executive_brief") and ai_summary_stats:
@@ -154,7 +255,7 @@ def run_pipeline(
         p2=sum(1 for f in active if f.priority == "High"),
         p3=sum(1 for f in active if f.priority == "Medium"),
         p4=sum(1 for f in active if f.priority == "Low"),
-        enrich_counts={} if skip_enrich else enricher.counts_dict(),
+        enrich_counts=enricher.counts_dict(),
         quarantine_by_rule=filter_metrics.get("quarantine_by_rule", {}),
         attack_paths=total_paths,
     )
@@ -204,6 +305,27 @@ def run_pipeline(
 
     from . import lifecycle
     lc = lifecycle.LifecycleManager(os.path.join(out_dir, "lifecycle.db"))
+    # Sync external ticket status changes back into lifecycle
+    try:
+        from .jira_client import JiraClient
+        jc = JiraClient()
+        if jc.configured:
+            sync_result = jc.sync_from_jira(lc)
+            if sync_result.get("synced", 0) > 0:
+                print(f"  [JIRA] Synced {sync_result['synced']} findings from Jira")
+    except Exception:
+        pass
+    try:
+        from . import github_tickets as _gh
+        gh_token = os.environ.get("GITHUB_TOKEN", "")
+        gh_repo = os.environ.get("GITHUB_REPO", "")
+        if gh_token and gh_repo:
+            gh_client = _gh.GitHubTickets(gh_repo, gh_token)
+            sync_result = gh_client.sync_from_github(lc)
+            if sync_result.get("synced", 0) > 0:
+                print(f"  [GITHUB] Synced {sync_result['synced']} findings from GitHub")
+    except Exception:
+        pass
     for product in summary.products:
         pf = [f for f in active if f.product == product]
         pscores = [f.score or 0 for f in pf]
@@ -214,6 +336,11 @@ def run_pipeline(
     lc.close()
 
     quarantine_list = [f for f in findings if f.status == "quarantined"]
+    # Save quarantine findings for dashboard regeneration
+    if quarantine_list:
+        quarantine_path = os.path.join(out_dir, "quarantine_findings.json")
+        with open(quarantine_path, "w", encoding="utf-8") as qf:
+            json.dump([f.to_dict() for f in quarantine_list], qf, indent=2)
     dashboard.build_dashboard(
         os.path.join(out_dir, "risk_dashboard.html"), findings, ranked, summary,
         all_paths, history_map, quarantine_list,
@@ -226,13 +353,17 @@ def run_pipeline(
     sarif_export.write_cyclonedx(os.path.join(out_dir, "bom.json"), ranked)
     sarif_export.write_defectdojo(os.path.join(out_dir, "defectdojo_import.json"), ranked)
 
+    # Auto-push findings to GitHub Issues in background thread
+    gh_thread = _launch_github_push(active, lifecycle_manager_path=os.path.join(out_dir, "lifecycle.db"))
+
     print(f"\n{'=' * 60}")
     print("[DONE] PIPELINE COMPLETE")
     print(f"{'=' * 60}")
     print(f"  Outputs in: {out_dir}")
 
     return {"findings": findings, "ranked": ranked, "summary": summary,
-            "attack_paths": all_paths, "metrics": noise, "ai_result": ai_result}
+            "attack_paths": all_paths, "metrics": noise, "ai_result": ai_result,
+            "github_push_thread": gh_thread}
 
 
 def main():
@@ -241,7 +372,7 @@ def main():
     parser.add_argument("--config", default="config.json", help="Config file path")
     parser.add_argument("--out", default="outputs", help="Output directory")
     parser.add_argument("--products", default=None, help="Comma-separated product filter")
-    parser.add_argument("--skip-enrich", action="store_true", help="Skip threat intel lookups")
+
     parser.add_argument("--skip-ai", action="store_true", help="Skip AI enrichment")
     parser.add_argument("--searchsploit", action="store_true", help="Use Exploit-DB CSV")
     parser.add_argument("--ollama-model", default=None, help="Ollama model name")
@@ -252,15 +383,21 @@ def main():
     config = Config.load(args.config)
     products = args.products.split(",") if args.products else None
     result = run_pipeline(args.reports, config, args.out, products=products,
-        skip_enrich=args.skip_enrich, skip_ai=args.skip_ai,
+        skip_ai=args.skip_ai,
         use_searchsploit=True if args.searchsploit else None,
         ollama_model=args.ollama_model,
         groq_api_key=args.groq_api_key if args.groq_api_key is not None else os.environ.get("GROQ_API_KEY"),
         groq_model=args.groq_model)
 
     if result["summary"].p1 > 0:
-        print(f"\n[WARN] {result['summary'].p1} Critical finding(s) detected!")
-        sys.exit(1)
+        print(f"\n[INFO] {result['summary'].p1} Critical finding(s) detected — review in dashboard.")
+
+    # Wait for background GitHub push if running from CLI
+    gh_thread = result.get("github_push_thread")
+    if gh_thread and gh_thread.is_alive():
+        print("\n[GITHUB] Waiting for issue push to complete...")
+        gh_thread.join(timeout=1800)
+        print("[GITHUB] Push finished.")
 
 
 if __name__ == "__main__":

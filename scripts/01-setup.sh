@@ -113,12 +113,32 @@ else
     [ -n "$GH_TOKEN" ] && info "Keeping existing GitHub token" || warn "Skipping GitHub"
 fi
 
+# Preserve existing integration keys from previous .env
+EXISTING_JIRA_URL=""; EXISTING_JIRA_USER=""; EXISTING_JIRA_TOKEN=""; EXISTING_JIRA_PROJECT=""
+EXISTING_DD_URL=""; EXISTING_DD_TOKEN=""
+if [ -f "$ENV_FILE" ]; then
+    EXISTING_JIRA_URL=$(grep "^JIRA_URL=" "$ENV_FILE" 2>/dev/null | cut -d'=' -f2- || true)
+    EXISTING_JIRA_USER=$(grep "^JIRA_USER=" "$ENV_FILE" 2>/dev/null | cut -d'=' -f2- || true)
+    EXISTING_JIRA_TOKEN=$(grep "^JIRA_TOKEN=" "$ENV_FILE" 2>/dev/null | cut -d'=' -f2- || true)
+    EXISTING_JIRA_PROJECT=$(grep "^JIRA_PROJECT=" "$ENV_FILE" 2>/dev/null | cut -d'=' -f2- || true)
+    EXISTING_DD_URL=$(grep "^DEFECTDOJO_URL=" "$ENV_FILE" 2>/dev/null | cut -d'=' -f2- || true)
+    EXISTING_DD_TOKEN=$(grep "^DEFECTDOJO_API_KEY=" "$ENV_FILE" 2>/dev/null | cut -d'=' -f2- || true)
+fi
+
 cat > "$ENV_FILE" << ENVEOF
 # DevSecOps Pipeline — API Keys
 GROQ_API_KEY=${GROQ_KEY}
 NVD_API_KEY=${NVD_KEY}
 GITHUB_TOKEN=${GH_TOKEN}
 GITHUB_REPOSITORY=${GH_REPO}
+# Jira Integration (configure from dashboard Integrations tab)
+JIRA_URL=${EXISTING_JIRA_URL}
+JIRA_USER=${EXISTING_JIRA_USER}
+JIRA_TOKEN=${EXISTING_JIRA_TOKEN}
+JIRA_PROJECT=${EXISTING_JIRA_PROJECT}
+# DefectDojo Integration (configure from dashboard Integrations tab)
+DEFECTDOJO_URL=${EXISTING_DD_URL}
+DEFECTDOJO_API_KEY=${EXISTING_DD_TOKEN}
 ENVEOF
 
 success ".env file written"

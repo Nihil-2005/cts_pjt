@@ -15,6 +15,9 @@ header()  { echo -e "\n${BOLD}${CYAN}══════════════�
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMPOSE_FILE="$SCRIPT_DIR/targets/docker-compose.yml"
 
+PIPELINE_TARGETS="${PIPELINE_TARGETS:-}"
+PIPELINE_PRODUCTS="${PIPELINE_PRODUCTS:-}"
+
 header "Deploying Target Apps"
 
 if [ -n "${PIPELINE_TARGETS// /}" ]; then

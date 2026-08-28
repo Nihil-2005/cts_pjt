@@ -11,8 +11,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "products": {},
     "scoring": {
         "weights": {
-            "cvss": 20, "epss": 20, "kev": 25, "exploit": 10,
-            "asset": 10, "exposure": 5, "data": 5, "patch": 5,
+            "cvss": 30, "epss": 15, "kev": 15, "exploit": 10,
+            "asset": 10, "exposure": 5, "data": 5, "patch": -5,
         },
         "sla_bands": [
             {"min": 90, "priority": "P1", "sla_hours": 24},
@@ -142,15 +142,6 @@ class Config:
         return cls({})
 
     def save(self, path: str) -> None:
-        dir_name = os.path.dirname(path) or "."
-        fd, tmp_path = tempfile.mkstemp(dir=dir_name, suffix=".tmp")
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                json.dump(self.data, fh, indent=2)
-            os.replace(tmp_path, path)
-        except Exception:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
-            raise
+        # Direct write — atomic replace doesn't work on Docker mounted volumes
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(self.data, fh, indent=2)

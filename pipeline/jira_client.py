@@ -49,15 +49,34 @@ class JiraClient:
         return requests_with_retry(method, url, auth=self._auth, json=kwargs.get("json"),
                                    params=kwargs.get("params"), timeout=30)
 
+    def _to_adf(self, text: str) -> Dict:
+        """Convert plain text to Atlassian Document Format (ADF) for Jira v3 API."""
+        paragraphs = []
+        for line in text.split("\n"):
+            if not line.strip():
+                continue
+            if line.startswith("h3. "):
+                paragraphs.append({"type": "heading", "attrs": {"level": 3},
+                    "content": [{"type": "text", "text": line[4:]}]})
+            elif line.startswith("* "):
+                paragraphs.append({"type": "bulletList", "content": [
+                    {"type": "listItem", "content": [{"type": "paragraph",
+                        "content": [{"type": "text", "text": line[2:]}]}]}]})
+            else:
+                paragraphs.append({"type": "paragraph", "content": [
+                    {"type": "text", "text": line}]})
+        return {"version": 1, "type": "doc",
+            "content": paragraphs or [{"type": "paragraph", "content": [{"type": "text", "text": " "}]}]}
+
     def create_issue(self, finding: Finding, labels: Optional[List[str]] = None) -> Dict[str, Any]:
         if not self.configured:
             return {"error": "Jira not configured", "configured": False}
         pri = PRIORITY_MAP.get(finding.priority or "P4", PRIORITY_MAP["P4"])
         issue_labels = labels or ["security", "auto-generated", f"scanner:{finding.scanner}"]
         desc_parts = [
-            f"*Risk Score:* {finding.score}/100 — {finding.priority}",
+            f"*Risk Score:* {finding.score}/100 -- {finding.priority}",
             f"*Product:* {finding.product}", f"*Endpoint:* {finding.endpoint or 'N/A'}",
-            f"*CVE:* [{finding.cve}|https://nvd.nist.gov/vuln/detail/{finding.cve}]" if finding.cve else "*CVE:* N/A",
+            f"*CVE:* {finding.cve} (https://nvd.nist.gov/vuln/detail/{finding.cve})" if finding.cve else "*CVE:* N/A",
             f"*CWE:* {finding.cwe or 'N/A'}", "",
         ]
         if finding.epss_score:
@@ -77,7 +96,7 @@ class JiraClient:
         payload = {"fields": {
             "project": {"key": self.project_key},
             "summary": f"[{finding.priority}] {finding.title[:140]} ({finding.product})",
-            "description": "\n".join(desc_parts),
+            "description": self._to_adf("\n".join(desc_parts)),
             "issuetype": {"name": "Bug"}, "priority": {"name": pri["jira"]},
             "labels": issue_labels,
         }}
@@ -139,6 +158,32 @@ class JiraClient:
         resp = self._api("GET", "search", params={"jql": jql, "maxResults": max_results,
                          "fields": "status,priority,summary,labels"})
         return resp.json().get("issues", []) if resp.status_code == 200 else []
+
+    def sync_from_jira(self, lifecycle_manager) -> Dict[str, Any]:
+        """Pull Jira status changes back into the lifecycle tracker."""
+        if not self.configured:
+            return {"synced": 0, "error": "Jira not configured"}
+        updated = 0
+        rows = lifecycle_manager.conn.execute(
+            "SELECT finding_id, jira_key, issue_url, status FROM tracked_findings"
+        ).fetchall()
+        for row in rows:
+            finding_id = row["finding_id"]
+            jira_key = row["jira_key"]
+            if not jira_key and row["issue_url"]:
+                jira_key = (row["issue_url"] or "").split("/")[-1]
+            current_status = row["status"]
+            if not jira_key or current_status in ("fixed", "false_positive", "risk_accepted"):
+                continue
+            jira_status = self.get_issue_status(jira_key)
+            if "error" in jira_status:
+                continue
+            new_status = jira_status.get("lifecycle_status", "")
+            if new_status and new_status != current_status:
+                lifecycle_manager.transition_status(
+                    finding_id, new_status, f"synced from Jira {jira_key} ({jira_status.get('status', '')})")
+                updated += 1
+        return {"synced": updated, "total_checked": len(rows)}
 
     def test_connection(self) -> Dict[str, Any]:
         if not self.configured:

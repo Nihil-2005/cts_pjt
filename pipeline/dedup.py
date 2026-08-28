@@ -198,5 +198,8 @@ def _merge_into(canon: Finding, dup: Finding) -> None:
 
 
 def _stable_id(f: Finding) -> str:
-    """Stable content-based ID for dedup references."""
-    return _key(f.product, f.scanner, _norm_title(f.title), _norm_endpoint(f.endpoint), f.cve or "")
+    """Human-readable ID for dedup references: CVE or title + scanner."""
+    if f.cve:
+        return f"{f.cve} ({f.scanner})"
+    short_title = (f.title or "unknown")[:40]
+    return f"{short_title} ({f.scanner})"

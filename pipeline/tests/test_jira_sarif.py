@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from unittest.mock import patch
 
 
 from pipeline.sarif_export import (
@@ -165,6 +166,7 @@ class TestDefectDojoExport:
 
 
 class TestJiraClient:
+    @patch.dict(os.environ, {"JIRA_URL": "", "JIRA_USER": "", "JIRA_TOKEN": "", "JIRA_PROJECT": ""}, clear=False)
     def test_not_configured_by_default(self):
         client = JiraClient()
         assert not client.configured
@@ -181,18 +183,21 @@ class TestJiraClient:
         assert LIFECYCLE_TO_JIRA_TRANSITION["in_progress"] == "In Progress"
         assert LIFECYCLE_TO_JIRA_TRANSITION["fixed"] == "Done"
 
+    @patch.dict(os.environ, {"JIRA_URL": "", "JIRA_USER": "", "JIRA_TOKEN": "", "JIRA_PROJECT": ""}, clear=False)
     def test_create_issue_not_configured(self):
         client = JiraClient()
         f = _make_finding()
         result = client.create_issue(f)
         assert result["configured"] is False
 
+    @patch.dict(os.environ, {"JIRA_URL": "", "JIRA_USER": "", "JIRA_TOKEN": "", "JIRA_PROJECT": ""}, clear=False)
     def test_bulk_create_not_configured(self):
         client = JiraClient()
         findings = [_make_finding(dedup_key=f"f{i}") for i in range(3)]
         result = client.create_issues_bulk(findings)
         assert result["created"] == 0
 
+    @patch.dict(os.environ, {"JIRA_URL": "", "JIRA_USER": "", "JIRA_TOKEN": "", "JIRA_PROJECT": ""}, clear=False)
     def test_test_connection_not_configured(self):
         client = JiraClient()
         result = client.test_connection()

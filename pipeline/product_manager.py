@@ -104,7 +104,7 @@ def get_product_github_repo(product_id: str) -> str:
     return _load_config().get("products", {}).get(product_id, {}).get("github_repo", "")
 
 
-def scan_product(product_id: str, skip_enrich: bool = False, skip_ai: bool = False) -> Dict:
+def scan_product(product_id: str, skip_ai: bool = False) -> Dict:
     config = _load_config()
     prod = config.get("products", {}).get(product_id)
     if not prod:
@@ -178,7 +178,7 @@ def scan_product(product_id: str, skip_enrich: bool = False, skip_ai: bool = Fal
     from . import run as pipeline_run
     try:
         result = pipeline_run.run_pipeline(scan_dir, pipeline_run.Config.load(os.path.abspath(CONFIG_PATH)),
-            output_dir, products=[product_id], skip_enrich=skip_enrich, skip_ai=skip_ai)
+            output_dir, products=[product_id], skip_ai=skip_ai)
         github_repo = prod.get("github_repo", "")
         if github_repo:
             _create_github_issues(product_id, github_repo, output_dir)
@@ -211,8 +211,8 @@ def _create_github_issues(product_id: str, github_repo: str, output_dir: str) ->
     print(f"  [ISSUES] Created {stats['created']} issues in {github_repo}")
 
 
-def scan_all(skip_enrich: bool = False, skip_ai: bool = False) -> List[Dict]:
-    return [scan_product(p["id"], skip_enrich=skip_enrich, skip_ai=skip_ai) for p in list_products()]
+def scan_all(skip_ai: bool = False) -> List[Dict]:
+    return [scan_product(p["id"], skip_ai=skip_ai) for p in list_products()]
 
 
 def main():
@@ -238,7 +238,7 @@ def main():
     scan_p = sub.add_parser("scan", help="Scan a product")
     scan_p.add_argument("--name", default=None)
     scan_p.add_argument("--all", action="store_true")
-    scan_p.add_argument("--skip-enrich", action="store_true")
+    scan_p.add_argument("
     scan_p.add_argument("--skip-ai", action="store_true")
 
     args = parser.parse_args()
@@ -277,9 +277,9 @@ def main():
         print(f"Product '{args.name}' updated")
     elif args.command == "scan":
         if args.all or args.name is None:
-            scan_all(skip_enrich=args.skip_enrich, skip_ai=args.skip_ai)
+            scan_all(skip_ai=args.skip_ai)
         else:
-            scan_product(args.name, skip_enrich=args.skip_enrich, skip_ai=args.skip_ai)
+            scan_product(args.name, skip_ai=args.skip_ai)
 
 
 if __name__ == "__main__":

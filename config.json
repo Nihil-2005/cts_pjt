@@ -39,11 +39,11 @@
     "bwapp": {
       "display_name": "bWAPP",
       "owner": "appsec-legacy",
-      "asset_criticality": 5,
-      "business_impact": 5,
-      "exposure": 7,
-      "control_effectiveness": 4,
-      "data_sensitivity": 5,
+      "asset_criticality": 7,
+      "business_impact": 7,
+      "exposure": 9,
+      "control_effectiveness": 2,
+      "data_sensitivity": 7,
       "url": "http://localhost:8080",
       "github_repo": "Nihil-2005/cts_works",
       "scanners": {
@@ -53,34 +53,18 @@
         "wapiti": "http://localhost:8080",
         "nmap": "http://localhost:8080"
       }
-    },
-    "admin": {
-      "display_name": "padavan",
-      "owner": "unassigned",
-      "asset_criticality": 5,
-      "business_impact": 5,
-      "exposure": 8,
-      "control_effectiveness": 3,
-      "data_sensitivity": 5,
-      "url": "http://192.168.1.1",
-      "github_repo": "Nihil-2005/cts_works",
-      "scanners": {
-        "nuclei": "http://192.168.1.1",
-        "zap": "http://192.168.1.1",
-        "wapiti": "http://192.168.1.1"
-      }
     }
   },
   "scoring": {
     "weights": {
-      "cvss": 20,
-      "epss": 20,
-      "kev": 25,
+      "cvss": 30,
+      "epss": 15,
+      "kev": 15,
       "exploit": 10,
       "asset": 10,
       "exposure": 5,
       "data": 5,
-      "patch": 5
+      "patch": -5
     },
     "sla_bands": [
       {

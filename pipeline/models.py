@@ -68,6 +68,7 @@ class Finding:
     owner: Optional[str] = None
     remediation_suggestions: List[Dict[str, Any]] = field(default_factory=list)
     escalation_potential: Optional[float] = None
+    found_at: Optional[str] = None
 
     @property
     def severity_num(self) -> float:

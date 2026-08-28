@@ -37,7 +37,6 @@ for arg in "$@"; do
         echo "Usage: bash scripts/04-pipeline.sh [OPTIONS]"
         echo ""
         echo "Options:"
-        echo "  --skip-enrich    Skip threat intel lookups (KEV/EPSS/NVD)"
         echo "  --skip-ai        Skip AI enrichment (FP classification)"
         echo "  --products X     Only scan specific product(s)"
         echo "  --help           Show this help"
@@ -47,7 +46,17 @@ done
 
 header "Running 9-Stage Pipeline"
 
-if [ ! -d "$REPORTS_DIR" ] || [ -z "$(ls "$REPORTS_DIR"/*.json 2>/dev/null)" ]; then
+# Sync scan reports from Docker volume to host (scanners write to Docker volume)
+if docker volume inspect devsecops-pipeline_scan-reports-vol >/dev/null 2>&1; then
+    VOL_FILES=$(docker run --rm -v devsecops-pipeline_scan-reports-vol:/data alpine sh -c "ls /data/ 2>/dev/null | grep -c .")
+    if [ "$VOL_FILES" -gt 0 ]; then
+        info "Syncing $VOL_FILES scan reports from Docker volume..."
+        docker run --rm -v devsecops-pipeline_scan-reports-vol:/data -v "$REPORTS_DIR:/host" alpine sh -c "cp -rn /data/* /host/ 2>/dev/null; cp -u /data/* /host/ 2>/dev/null"
+        success "Scan reports synced"
+    fi
+fi
+
+if [ ! -d "$REPORTS_DIR" ] || [ -z "$(ls "$REPORTS_DIR"/*.json "$REPORTS_DIR"/*.xml 2>/dev/null)" ]; then
     error "No scan reports found in $REPORTS_DIR/"
     error "Run scanner first: bash scripts/03-scan.sh"
     exit 1

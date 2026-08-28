@@ -99,6 +99,23 @@ if ! $DASHBOARD_READY; then
     warn "Dashboard may still be starting (check http://localhost:8000)"
 fi
 
+cleanup() {
+    info "Shutting down..."
+    if kill -0 $DASHBOARD_PID 2>/dev/null; then
+        kill $DASHBOARD_PID 2>/dev/null
+        wait $DASHBOARD_PID 2>/dev/null || true
+    fi
+    if command -v docker &>/dev/null; then
+        if docker compose version &>/dev/null; then
+            docker compose -f "$SCRIPT_DIR/targets/docker-compose.yml" down 2>/dev/null || true
+        elif command -v docker-compose &>/dev/null; then
+            docker-compose -f "$SCRIPT_DIR/targets/docker-compose.yml" down 2>/dev/null || true
+        fi
+    fi
+    exit 0
+}
+trap cleanup INT TERM
+
 if [ "$SKIP_SCAN" = "1" ]; then
     header "Stage 3/5: Deploy — SKIPPED (--skip-scan)"
 elif [ "$REMOTE_MODE" = "1" ]; then
@@ -126,23 +143,6 @@ echo "  ACCESS:"
 echo "    Dashboard: http://localhost:8000"
 echo "    Login:     admin / ${DASHBOARD_PASS:-???}"
 echo ""
-
-cleanup() {
-    info "Shutting down..."
-    if kill -0 $DASHBOARD_PID 2>/dev/null; then
-        kill $DASHBOARD_PID 2>/dev/null
-        wait $DASHBOARD_PID 2>/dev/null || true
-    fi
-    if command -v docker &>/dev/null; then
-        if docker compose version &>/dev/null; then
-            docker compose -f "$SCRIPT_DIR/targets/docker-compose.yml" down 2>/dev/null || true
-        elif command -v docker-compose &>/dev/null; then
-            docker-compose -f "$SCRIPT_DIR/targets/docker-compose.yml" down 2>/dev/null || true
-        fi
-    fi
-    exit 0
-}
-trap cleanup INT TERM
 
 info "Dashboard is running. Press Ctrl+C to stop."
 wait $DASHBOARD_PID 2>/dev/null || true

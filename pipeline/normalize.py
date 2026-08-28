@@ -327,13 +327,14 @@ def parse_nmap_xml(text: str, product: str) -> List[Finding]:
                         out.append(Finding(
                             scanner="nmap",
                             product=product,
-                            title=f"{cve_text} (Apache httpd)",
+                            title=f"{cve_text} ({svc_name})",
                             severity=v_sev,
                             cve=cve_text,
+                            cwe=None,
                             endpoint=f"{addr}:{portid}",
-                            description=f"Nmap vulners script detected {cve_text} (CVSS {cvss_val}) against {svc_name} on port {portid}.",
+                            description=f"Nmap vulners detected {cve_text} (CVSS {cvss_val}) on {svc_name} port {portid}.",
                             evidence=sout[:500],
-                            raw={"nse_script": sid, "port": portid, "host": addr},
+                            raw={"nse_script": sid, "port": portid, "host": addr, "cvss_score": cvss_val, "service": svc_name},
                         ))
                 # http-slowloris-check, http-csrf, http-dombased-xss, etc.
                 elif sid.startswith("http-") and "VULNERABLE" in sout.upper():

@@ -43,6 +43,7 @@ def _serialize_findings(ranked: List[Finding]) -> List[Dict]:
                 "title": f.title or "",
                 "severity": f.severity or "",
                 "cve": f.cve or "",
+                "advisory_type": ('cve' if (f.cve or '').startswith('CVE-') else 'ghsa' if (f.cve or '').startswith('GHSA-') else 'nswg' if (f.cve or '').startswith('NSWG-') else 'other' if f.cve else ''),
                 "cwe": f.cwe or "",
                 "endpoint": f.endpoint or "",
                 "parameter": f.parameter or "",
@@ -57,11 +58,15 @@ def _serialize_findings(ranked: List[Finding]) -> List[Dict]:
                 "description": (f.description or "")[:400],
                 "package": f.package or "",
                 "fixed_version": f.fixed_version or "",
+                "nvd_cvss": f.nvd_cvss,
+                "scanner_cvss": (f.raw.get("cvss_score") if isinstance(f.raw, dict) else None),
+                "installed_version": f.installed_version or "",
                 "ai_fp_probability": sb.get("ai_fp_probability", ""),
                 "ai_fp_reason": sb.get("ai_fp_reason", ""),
                 "ai_remediation": sb.get("ai_remediation", ""),
                 "score_components": sb.get("components", {}),
                 "score_drivers": sb.get("drivers", []),
+                "found_at": f.found_at or "",
                 "remediation": [
                     {"kind": s.get("kind", ""), "text": (s.get("text", ""))[:250]}
                     for s in (f.remediation_suggestions or [])[:5]
@@ -80,6 +85,7 @@ def _serialize_quarantine(findings: List[Finding]) -> List[Dict]:
             "severity": f.severity or "",
             "reason": f.quarantine_reason or "",
             "cve": f.cve or "",
+            "found_at": f.found_at or "",
         }
         for f in findings
         if f.status == "quarantined"
@@ -333,9 +339,10 @@ select.input option{background:var(--bg-elevated);color:var(--text-primary)}
   <div class="grid-3 mb-6">
     <div class="card"><div class="card-header">Priority Distribution</div><div style="height:200px"><canvas id="c-priority" aria-label="Priority distribution chart"></canvas></div></div>
     <div class="card"><div class="card-header">Severity Breakdown</div><div style="height:200px"><canvas id="c-severity" aria-label="Severity breakdown chart"></canvas></div></div>
-    <div class="card"><div class="card-header">Scanner Coverage</div><div style="height:200px"><canvas id="c-scanner" aria-label="Scanner coverage chart"></canvas></div></div>
+    <div class="card"><div class="card-header">Exploitation Risk (EPSS)</div><div style="height:200px"><canvas id="c-exploit-risk" aria-label="Exploitation risk chart"></canvas></div></div>
   </div>
-  <div class="grid-2">
+  <div class="grid-3 mb-6">
+    <div class="card"><div class="card-header">Scanner Coverage</div><div style="height:200px"><canvas id="c-scanner" aria-label="Scanner coverage chart"></canvas></div></div>
     <div class="card"><div class="card-header">Noise Reduction Pipeline</div><div style="height:200px"><canvas id="c-noise" aria-label="Noise reduction chart"></canvas></div></div>
     <div class="card"><div class="card-header">Risk Over Time</div><div style="height:200px"><canvas id="c-history" aria-label="Risk trend chart"></canvas></div></div>
   </div>
@@ -349,6 +356,7 @@ select.input option{background:var(--bg-elevated);color:var(--text-primary)}
     <select id="f-severity" class="input" style="width:140px"><option value="">All severities</option></select>
     <select id="f-scanner" class="input" style="width:140px"><option value="">All scanners</option></select>
     <select id="f-kev" class="input" style="width:140px"><option value="">Threat intel</option><option value="kev">KEV only</option><option value="exploit">Exploit available</option></select>
+    <select id="f-time" class="input" style="width:140px"><option value="">All time</option><option value="24h">Last 24 hours</option><option value="7d">Last 7 days</option><option value="30d">Last 30 days</option><option value="90d">Last 90 days</option></select>
     <button class="btn btn-secondary btn-sm" onclick="App.findings.exportCSV()">Export CSV</button>
     <span class="result-count" id="result-badge">-- findings</span>
   </div>
@@ -375,7 +383,13 @@ select.input option{background:var(--bg-elevated);color:var(--text-primary)}
 <!-- ═══════════════════ QUARANTINE ═══════════════════ -->
 <main id="page-quarantine" class="page" role="tabpanel" aria-labelledby="tab-quarantine">
   <p class="q-note">Quarantined findings remain auditable. They are excluded from scoring.</p>
-  <div class="table-wrap"><table class="data-table"><thead><tr><th>Product</th><th>Scanner</th><th>Severity</th><th>Title</th><th>CVE</th><th>Reason</th></tr></thead><tbody id="q-body"></tbody></table></div>
+  <div class="filter-row" style="margin-bottom:var(--space-3)">
+    <input id="q-search" class="input" placeholder="Search quarantine..." style="max-width:280px">
+    <select id="q-severity" class="input" style="width:140px"><option value="">All severities</option></select>
+    <select id="q-time" class="input" style="width:140px"><option value="">All time</option><option value="24h">Last 24 hours</option><option value="7d">Last 7 days</option><option value="30d">Last 30 days</option></select>
+    <span class="result-count" id="q-badge">-- quarantined</span>
+  </div>
+  <div class="table-wrap"><table class="data-table"><thead><tr><th>Product</th><th>Scanner</th><th>Severity</th><th>Title</th><th>CVE</th><th>Reason</th><th>Found</th></tr></thead><tbody id="q-body"></tbody></table></div>
 </main>
 
 <!-- ═══════════════════ PRODUCTS ═══════════════════ -->
@@ -401,6 +415,16 @@ select.input option{background:var(--bg-elevated);color:var(--text-primary)}
       </div>
     </div>
   </div>
+  <div class="card" style="margin-top:var(--space-5)">
+    <div class="card-header">Import External Findings</div>
+    <p style="font-size:var(--text-xs);color:var(--text-tertiary);margin-bottom:var(--space-3)">Upload JSON, XML, CSV, or SARIF files from other scanners (Nessus, Qualys, Burp, etc.)</p>
+    <div style="display:flex;gap:var(--space-3);align-items:center;flex-wrap:wrap">
+      <input type="file" id="import-file" accept=".json,.xml,.csv,.sarif" class="input" style="max-width:300px;padding:6px">
+      <input id="import-source" class="input" placeholder="Source name (e.g. nessus, burp)" style="max-width:200px" value="external">
+      <button class="btn btn-primary" onclick="App.products.importFile()">Import</button>
+      <span id="import-msg" style="font-size:var(--text-xs)"></span>
+    </div>
+  </div>
 </main>
 
 <!-- ═══════════════════ CONTROL CENTER ═══════════════════ -->
@@ -416,6 +440,8 @@ select.input option{background:var(--bg-elevated);color:var(--text-primary)}
         <button class="btn btn-primary" onclick="App.control.runPipeline()">Run Pipeline</button>
         <button class="btn btn-secondary" onclick="App.control.scanAll()">Scan All Products</button>
         <button class="btn btn-secondary" onclick="App.control.createTickets()">Create GitHub Issues</button>
+        <button class="btn btn-secondary" onclick="App.control.syncFromJira()">Sync from Jira</button>
+        <button class="btn btn-secondary" onclick="App.control.syncFromGitHub()">Sync from GitHub</button>
         <button class="btn btn-secondary" onclick="App.control.checkDocker()">Check Docker Status</button>
       </div>
     </div>
@@ -494,7 +520,7 @@ select.input option{background:var(--bg-elevated);color:var(--text-primary)}
     <span id="apikey-status" style="font-size:var(--text-xs)"></span>
   </div>
   <div class="grid-2 mb-6">
-    <div class="card"><div class="card-header">Jira Integration</div><div style="display:flex;gap:var(--space-2);margin-bottom:var(--space-3)"><button class="btn btn-secondary btn-sm" onclick="App.integrations.testJira()">Test Connection</button><button class="btn btn-primary btn-sm" onclick="App.integrations.createJira()">Create Issues</button></div><div id="jira-status"></div></div>
+    <div class="card"><div class="card-header">Jira Integration</div><div style="display:flex;gap:var(--space-2);margin-bottom:var(--space-3)"><button class="btn btn-secondary btn-sm" onclick="App.integrations.testJira()">Test Connection</button><button class="btn btn-primary btn-sm" onclick="App.integrations.createJira()">Create Issues</button><button class="btn btn-secondary btn-sm" onclick="App.control.syncFromJira()">Sync Status</button></div><div id="jira-status"></div></div>
     <div class="card"><div class="card-header">DefectDojo</div><div style="display:flex;gap:var(--space-2);margin-bottom:var(--space-3)"><button class="btn btn-secondary btn-sm" onclick="App.integrations.testDD()">Test Connection</button><button class="btn btn-primary btn-sm" onclick="App.integrations.importDD()">Import Findings</button></div><div id="dd-status"></div></div>
   </div>
   <div class="card">
@@ -523,8 +549,8 @@ const CHART_COLORS={
 const TABLE_COLUMNS=[
   {k:'rank',label:'#',w:'40px',sortable:true,dir:-1},
   {k:'score',label:'Score',w:'90px',sortable:true,dir:-1},
-  {k:'priority',label:'Priority',w:'80px',sortable:true,dir:-1,customSort:function(a,b){return parseInt((a||'P0').slice(1))-parseInt((b||'P0').slice(1));}},
-  {k:'severity',label:'Severity',w:'80px',sortable:true,dir:-1},
+  {k:'priority',label:'Priority',w:'80px',sortable:true,dir:-1,customSort:function(a,b){var order={Critical:4,High:3,Medium:2,Low:1};return (order[a]||0)-(order[b]||0);}},
+  {k:'severity',label:'Severity',w:'80px',sortable:true,dir:-1,customSort:function(a,b){var order={critical:5,high:4,medium:3,low:2,info:1};return ((order[a]||0)-(order[b]||0));}},
   {k:'title',label:'Title',w:'',sortable:false},
   {k:'product',label:'Product',w:'100px',sortable:true,dir:1},
   {k:'scanner',label:'Scanner',w:'80px',sortable:true,dir:1},
@@ -660,12 +686,15 @@ const App={
     init(){
       var S=App.data.summary;
       var noiseRm=S.raw_findings>0?parseFloat(((S.raw_findings-S.final_findings)/S.raw_findings*100).toFixed(1)):0;
+      var F=App.data.findings||[];
+      var highEpss=0;F.forEach(function(f){if(f.epss_score!=null&&f.epss_score>=0.4)highEpss++;});
       var cards=[
         {v:S.raw_findings,l:'Raw Findings',sub:'Before processing',color:''},
         {v:S.unique_findings,l:'After Dedup',sub:S.dedup_pct+'% removed',color:''},
         {v:S.quarantined,l:'Quarantined',sub:'False positives / accepted',color:''},
         {v:S.final_findings,l:'Active Findings',sub:'Prioritized & scored',color:''},
         {v:S.p1+S.p2,l:'Critical + High',sub:S.p1+' Critical \u00b7 '+S.p2+' High',color:S.p1>0?'text-critical':''},
+        {v:highEpss,l:'High Exploit Risk',sub:'EPSS \u226540% (likely exploited)',color:highEpss>0?'text-high':''},
         {v:S.avg_score,l:'Avg Risk Score',sub:'Top: '+S.top_score,color:''},
         {v:noiseRm,l:'Noise Reduction',sub:'Raw to final',color:'text-low',isPercent:true}
       ];
@@ -719,6 +748,23 @@ const App={
           var sl=['critical','high','medium','low','info'];
           new Chart(se,{type:'bar',data:{labels:sl.map(function(s){return s.charAt(0).toUpperCase()+s.slice(1);}),datasets:[{data:sl.map(function(s){return sc[s]||0;}),backgroundColor:[CHART_COLORS.critical,CHART_COLORS.high,CHART_COLORS.medium,CHART_COLORS.low,CHART_COLORS.info],borderWidth:0,borderRadius:4}]},options:hBarOpts});
         }
+        // Exploitation risk (EPSS-based)
+        var ere=App.$('c-exploit-risk');
+        if(ere){
+          var riskBuckets={critical:0,high:0,medium:0,low:0,none:0};
+          F.forEach(function(f){
+            var prob=f.epss_score!=null?f.epss_score:0;
+            if(prob>=0.7)riskBuckets.critical++;
+            else if(prob>=0.4)riskBuckets.high++;
+            else if(prob>=0.1)riskBuckets.medium++;
+            else if(prob>0)riskBuckets.low++;
+            else riskBuckets.none++;
+          });
+          var rkLabels=['Critical (\u226570%)','High (40-70%)','Medium (10-40%)','Low (1-10%)','None (0%)'];
+          var rkData=[riskBuckets.critical,riskBuckets.high,riskBuckets.medium,riskBuckets.low,riskBuckets.none];
+          var rkColors=['#DC2626','#F59E0B','#3B82F6','#6B7280','#D1D5DB'];
+          new Chart(ere,{type:'bar',data:{labels:rkLabels,datasets:[{data:rkData,backgroundColor:rkColors,borderWidth:0,borderRadius:4}]},options:hBarOpts});
+        }
         // Scanner coverage
         var sce=App.$('c-scanner');
         if(sce){
@@ -751,7 +797,7 @@ const App={
   /* ═══ FINDINGS ═══ */
   findings:{
     _sortCol:'score',_sortDir:-1,_search:'',_fPri:'',_fSev:'',_fScan:'',_fKev:'',
-    _searchEl:null,_fPriEl:null,_fSevEl:null,_fScanEl:null,_fKevEl:null,
+    _searchEl:null,_fPriEl:null,_fSevEl:null,_fScanEl:null,_fKevEl:null,_fTimeEl:null,
     _filteredCache:null,_cacheKey:'',
     init(){
       var self=this;
@@ -760,6 +806,7 @@ const App={
       this._fSevEl=App.$('f-severity');
       this._fScanEl=App.$('f-scanner');
       this._fKevEl=App.$('f-kev');
+      this._fTimeEl=App.$('f-time');
       var F=App.data.findings;
       var thead=App.$('tbl-head');if(!thead)return;
       thead.innerHTML='<tr>'+TABLE_COLUMNS.map(function(c){
@@ -788,17 +835,18 @@ const App={
       var tb=App.$('tbl-body');
       if(tb){tb.addEventListener('click',function(e){var tr=e.target.closest('.data-row');if(tr)App.findings.toggleDetail(tr);});}
       if(this._searchEl)this._searchEl.addEventListener('input',function(e){self._search=e.target.value;self._invalidateFilterCache();clearTimeout(self._searchTimer);self._searchTimer=setTimeout(function(){self.render();},300);});
-      this._fPriEl.addEventListener('change',function(e){self._fPri=e.target.value;self._invalidateFilterCache();self.render();});
-      this._fSevEl.addEventListener('change',function(e){self._fSev=e.target.value;self._invalidateFilterCache();self.render();});
-      this._fScanEl.addEventListener('change',function(e){self._fScan=e.target.value;self._invalidateFilterCache();self.render();});
-      this._fKevEl.addEventListener('change',function(e){self._fKev=e.target.value;self._invalidateFilterCache();self.render();});
+      if(this._fPriEl)this._fPriEl.addEventListener('change',function(e){self._fPri=e.target.value;self._invalidateFilterCache();self.render();});
+      if(this._fSevEl)this._fSevEl.addEventListener('change',function(e){self._fSev=e.target.value;self._invalidateFilterCache();self.render();});
+      if(this._fScanEl)this._fScanEl.addEventListener('change',function(e){self._fScan=e.target.value;self._invalidateFilterCache();self.render();});
+      if(this._fKevEl)this._fKevEl.addEventListener('change',function(e){self._fKev=e.target.value;self._invalidateFilterCache();self.render();});
+      if(this._fTimeEl)this._fTimeEl.addEventListener('change',function(e){self._fTime=e.target.value;self._invalidateFilterCache();self.render();});
       this.render();
     },
     _invalidateFilterCache(){this._filteredCache=null;this._filterKey='';this._invalidateSortCache();},
     _invalidateSortCache(){this._sortedCache=null;this._sortKey='';},
     getFiltered(){
       var F=App.data.findings,q=this._search.toLowerCase(),self=this;
-      var filterKey=this._search+'\x00'+this._fPri+'\x00'+this._fSev+'\x00'+this._fScan+'\x00'+this._fKev;
+      var filterKey=this._search+'\x00'+this._fPri+'\x00'+this._fSev+'\x00'+this._fScan+'\x00'+this._fKev+'\x00'+this._fTime;
       var sortKey=this._sortCol+'\x00'+this._sortDir;
       var filtered;
       if(this._filteredCache!==null&&this._filterKey===filterKey){
@@ -810,6 +858,13 @@ const App={
           if(self._fScan&&f.scanner!==self._fScan)return false;
           if(self._fKev==='kev'&&!f.kev)return false;
           if(self._fKev==='exploit'&&!f.exploit_available)return false;
+          if(self._fTime&&f.found_at){
+            var found=new Date(f.found_at);var now=new Date();
+            if(self._fTime==='24h'&&((now-found)>86400000))return false;
+            if(self._fTime==='7d'&&((now-found)>604800000))return false;
+            if(self._fTime==='30d'&&((now-found)>2592000000))return false;
+            if(self._fTime==='90d'&&((now-found)>7776000000))return false;
+          }
           if(q){
             var qLower=q;
             return f.title.toLowerCase().includes(qLower)||
@@ -854,8 +909,8 @@ const App={
         '<td><span class="truncate" style="max-width:300px;color:var(--text-primary);font-weight:500" title="'+App.tooltipText(title)+'">'+App.esc(truncated)+'</span></td>'+
         '<td class="truncate" style="max-width:100px">'+App.esc(f.product)+'</td>'+
         '<td class="dimmed" style="font-size:11px">'+App.esc(f.scanner)+'</td>'+
-        '<td>'+(f.cve?'<a class="cve-link" href="https://nvd.nist.gov/vuln/detail/'+App.esc(f.cve)+'" target="_blank" onclick="event.stopPropagation()">'+App.esc(f.cve)+'</a>':'<span class="dimmed">\u2014</span>')+'</td>'+
-        '<td>'+(f.kev?'<span style="color:var(--risk-critical);font-weight:600;font-size:11px">KEV</span>':'<span class="dimmed">\u2014</span>')+'</td>'+
+        '<td>'+(f.cve?(f.advisory_type==='ghsa'?'<a class="cve-link" href="https://github.com/advisories/'+App.esc(f.cve)+'" target="_blank" onclick="event.stopPropagation()">'+App.esc(f.cve)+'</a>':f.advisory_type==='nswg'?'<span class="cve-link" title="Node.js Security WG" onclick="event.stopPropagation()">'+App.esc(f.cve)+'</span>':'<a class="cve-link" href="https://nvd.nist.gov/vuln/detail/'+App.esc(f.cve)+'" target="_blank" onclick="event.stopPropagation()">'+App.esc(f.cve)+'</a>'):'<span class="dimmed">\u2014</span>')+'</td>'+
+        '<td>'+(f.kev?'<span style="color:var(--risk-critical);font-weight:600;font-size:11px">KEV</span>':'<span class="dimmed" title="Not in CISA KEV — training targets lack actively exploited CVEs">\u2014</span>')+'</td>'+
         '<td>'+(f.exploit_available?'<span style="color:var(--risk-high);font-weight:600;font-size:11px">\u2714</span>':'<span class="dimmed">\u2014</span>')+'</td>'+
         '<td class="mono" style="font-size:11px;color:var(--text-secondary)">'+epssStr+'</td>'+
         '<td class="mono dimmed" style="font-size:11px" title="Remediation deadline: '+f.priority+' findings must be fixed within '+f.sla_hours+' hours">'+f.sla_hours+'h</td>'+
@@ -873,21 +928,24 @@ const App={
       var epssPctile=f.epss_percentile!=null?(f.epss_percentile*100).toFixed(2)+'%':'N/A';
       var epssTrend=f.epss_trend!=null?(f.epss_trend>0?'+':'')+f.epss_trend.toFixed(4):'';
       var epssTrendHtml=epssTrend?'<span style="color:'+(parseFloat(epssTrend)>0?'var(--risk-critical)':'var(--risk-low)')+';font-size:10px;margin-left:4px">('+epssTrend+'/7d)</span>':'';
-      var kevBadge=f.kev?'<span style="color:var(--risk-critical);font-weight:700">YES</span> <span style="color:var(--text-tertiary);font-size:10px">added '+App.esc(f.kev_date||'')+'</span>':'<span style="color:var(--text-tertiary)">No (not in CISA KEV)</span>';
+      var kevBadge=f.kev?'<span style="color:var(--risk-critical);font-weight:700">YES</span> <span style="color:var(--text-tertiary);font-size:10px">added '+App.esc(f.kev_date||'')+'</span>':'<span style="color:var(--text-tertiary)">No <span style="font-size:9px;display:block;margin-top:2px;opacity:0.7">CISA KEV only tracks confirmed actively exploited CVEs (1,682 total). Your target apps contain training/lab vulnerabilities that are not on this list.</span></span>';
       var exploitBadge=f.exploit_available?'<span style="color:var(--risk-high);font-weight:700">YES</span> <span style="color:var(--text-tertiary);font-size:10px">('+App.esc(f.exploit_source||'')+')</span>':'<span style="color:var(--text-tertiary)">No</span>';
-      var cvssVal=f.nvd_cvss!=null?f.nvd_cvss.toFixed(1)+' (NVD)':'N/A (severity approx: '+(sb.cvss||0)+'pts)';
+      var cvssRaw=f.nvd_cvss!=null?f.nvd_cvss.toFixed(1)+' (NVD)':(f.scanner_cvss!=null&&f.scanner_cvss>0?f.scanner_cvss.toFixed(1)+' (scanner)':'N/A');
+      var cvssPts=(sb.cvss||0).toFixed(1);
       var cweLink=f.cwe?'<a href="https://cwe.mitre.org/data/definitions/'+App.esc(f.cwe.replace('CWE-',''))+'.html" target="_blank" style="color:var(--infoBar)">'+App.esc(f.cwe)+'</a>':'N/A';
       var pkgInfo=f.package?'<div class="detail-row-item"><span class="detail-key">Package</span><span class="detail-val">'+App.esc(f.package)+(f.fixed_version?' <span style="color:var(--risk-low)">\u2192 '+App.esc(f.fixed_version)+'</span>':' <span style="color:var(--text-tertiary)">(no fix)</span>')+'</span></div>':'';
       var instVer=f.installed_version?'<div class="detail-row-item"><span class="detail-key">Installed</span><span class="detail-val" style="font-family:monospace;font-size:11px">'+App.esc(f.installed_version)+'</span></div>':'';
       var fixVer=f.fixed_version?'<div class="detail-row-item"><span class="detail-key">Fixed In</span><span class="detail-val" style="font-family:monospace;font-size:11px;color:var(--risk-low)">'+App.esc(f.fixed_version)+'</span></div>':'';
       var evidence=f.evidence?'<div class="detail-row-item"><span class="detail-key">Evidence</span><span class="detail-val" style="font-family:monospace;font-size:11px;word-break:break-all">'+App.esc(f.evidence)+'</span></div>':'';
       // Score component weights (show max possible)
-      var weightMap={cvss:20,epss:20,kev:25,exploit:10,asset:10,exposure:5,data:5,patch:5};
+      var weightMap={cvss:30,epss:15,kev:15,exploit:10,asset:10,exposure:5,data:5,patch:-5};
       var compsWeighted=Object.entries(sb).map(function(kv){
-        var k=kv[0],v=kv[1];var w=weightMap[k]||'?';
-        var pct=k==='patch'?((v<0)?'penalty':''):('/ '+w);
+        var k=kv[0],v=kv[1];var w=weightMap[k];
+        if(w===undefined)w='?';
+        var pct=k==='patch'?((v<0)?'penalty':'bonus'):('/ '+w);
         return '<div style="display:flex;justify-content:space-between;padding:2px 0"><span style="color:var(--text-tertiary)">'+k+'</span><b style="color:var(--text-primary)">'+v+' <span style="color:var(--text-tertiary);font-size:10px">'+pct+'</span></b></div>';
       }).join('');
+
       var sevColor={critical:'var(--risk-critical)',high:'var(--risk-high)',medium:'var(--risk-medium)',low:'var(--risk-low)',info:'var(--text-tertiary)'};
       var sevColorVal=sevColor[f.severity]||'var(--text-secondary)';
       return '<div class="detail-panel"><div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-4)"><div>'+
@@ -896,7 +954,7 @@ const App={
         '<div class="detail-row-item"><span class="detail-key">Endpoint</span><span class="detail-val">'+App.esc(f.endpoint||'\u2014')+(f.parameter?' ('+App.esc(f.parameter)+')':'')+'</span></div>'+
         '<div class="detail-row-item"><span class="detail-key">Product</span><span class="detail-val">'+App.esc(f.product||'\u2014')+'</span></div>'+
         '<div class="detail-row-item"><span class="detail-key">Scanner</span><span class="detail-val">'+App.esc(f.scanner||'\u2014')+'</span></div>'+
-        '<div class="detail-row-item"><span class="detail-key">CVE</span><span class="detail-val">'+(f.cve?'<a class="cve-link" href="https://nvd.nist.gov/vuln/detail/'+App.esc(f.cve)+'" target="_blank">'+App.esc(f.cve)+'</a>':'N/A')+'</span></div>'+
+        (function(){var at=f.advisory_type||'';var idLabel=at==='ghsa'?'GHSA':at==='nswg'?'NSWG':'CVE';var idLink=f.cve?(at==='ghsa'?'<a class="cve-link" href="https://github.com/advisories/'+App.esc(f.cve)+'" target="_blank">'+App.esc(f.cve)+'</a>':at==='nswg'?'<span class="cve-link">'+App.esc(f.cve)+'</span>':'<a class="cve-link" href="https://nvd.nist.gov/vuln/detail/'+App.esc(f.cve)+'" target="_blank">'+App.esc(f.cve)+'</a>'):'N/A';return '<div class="detail-row-item"><span class="detail-key">'+idLabel+'</span><span class="detail-val">'+idLink+'</span></div>';})()+
         '<div class="detail-row-item"><span class="detail-key">CWE</span><span class="detail-val">'+cweLink+'</span></div>'+
         instVer+fixVer+pkgInfo+evidence+
         '<div class="detail-row-item"><span class="detail-key">Owner</span><span class="detail-val">'+App.esc(f.owner||'\u2014')+' \u00b7 SLA '+f.sla_hours+'h</span></div>'+
@@ -904,12 +962,14 @@ const App={
         '<div class="detail-section"><div class="detail-section-title">\u{1f50d} Raw Enrichment Data (Before Scoring)</div>'+
         '<div style="padding:var(--space-3);background:var(--bg-base);border-radius:6px;margin-bottom:var(--space-3)">'+
         '<div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-2);font-size:var(--text-xs)">'+
-        '<div><span style="color:var(--text-tertiary)">CVSS Score (NVD)</span><div style="font-weight:600;color:var(--text-primary);font-size:var(--text-sm)">'+cvssVal+'</div></div>'+
+        '<div><span style="color:var(--text-tertiary)">CVSS Score</span><div style="font-weight:600;color:var(--text-primary);font-size:var(--text-sm)">'+cvssRaw+' <span style="color:var(--text-tertiary);font-size:10px">('+cvssPts+' pts in score)</span></div></div>'+
         '<div><span style="color:var(--text-tertiary)">EPSS Probability (raw)</span><div style="font-weight:600;color:var(--text-primary);font-size:var(--text-sm)">'+epssRaw+' ('+epssPct+')'+epssTrendHtml+'</div></div>'+
         '<div><span style="color:var(--text-tertiary)">EPSS Percentile</span><div style="font-weight:600;color:var(--text-primary);font-size:var(--text-sm)">'+epssPctile+'</div></div>'+
         '<div><span style="color:var(--text-tertiary)">EPSS 7-day Trend</span><div style="font-weight:600;color:var(--text-primary);font-size:var(--text-sm)">'+(epssTrend||'N/A (no trend data)')+'</div></div>'+
         '<div><span style="color:var(--text-tertiary)">KEV (CISA Known Exploited)</span><div style="font-size:var(--text-sm)">'+kevBadge+'</div></div>'+
         '<div><span style="color:var(--text-tertiary)">Exploit Available</span><div style="font-size:var(--text-sm)">'+exploitBadge+'</div></div>'+
+        (function(){var epssProb=f.epss_score!=null?f.epss_score:0;var riskLabel='LOW';var riskColor='var(--risk-low)';if(epssProb>=0.7){riskLabel='CRITICAL';riskColor='var(--risk-critical)';}else if(epssProb>=0.4){riskLabel='HIGH';riskColor='var(--risk-high)';}else if(epssProb>=0.1){riskLabel='MEDIUM';riskColor='var(--risk-medium)';}return '<div><span style="color:var(--text-tertiary)">Exploitation Risk (EPSS-based)</span><div style="font-size:var(--text-sm)"><span style="color:'+riskColor+';font-weight:700">'+riskLabel+'</span> <span style="color:var(--text-tertiary);font-size:10px">('+(epssProb*100).toFixed(1)+'% probability of exploitation in 30 days)</span></div><div style="font-size:9px;color:var(--text-tertiary);margin-top:2px;opacity:0.7">EPSS predicts real-world exploitation likelihood. A &ge;70% probability means this CVE is highly likely to be exploited soon.</div></div>';
+        })()+
         '</div></div>'+
         '<div style="margin-top:var(--space-2);color:var(--text-secondary);font-size:var(--text-xs);line-height:1.6">'+(f.description||'').replace(/<p[^>]*>/gi,' ').replace(/<\/p>/gi,' ').replace(/<[^>]+>/g,'')+'</div></div></div>'+
         '<div><div class="detail-section"><div class="detail-section-title">\u{1f4ca} Score Breakdown (0-100)</div>'+
@@ -1051,12 +1111,35 @@ const App={
     }
   },
 
-  /* ═══ QUARANTINE ═══ */    buildQuarantine(){
-    var Q=App.data.quarantine;var qb=App.$('q-body');if(!qb)return;
-    qb.innerHTML='';
-    if(!Q.length){qb.innerHTML='<tr><td colspan="6"><div class="empty-state" style="padding:var(--space-5)"><p class="empty-state-title">No Quarantined Findings</p></div></td></tr>';return;}
-    qb.innerHTML=Q.map(function(q){
-      return '<tr><td>'+App.esc(q.product)+'</td><td>'+App.esc(q.scanner)+'</td><td><span class="badge '+App.sevClass(q.severity)+'">'+App.esc(q.severity)+'</span></td><td>'+App.esc(q.title)+'</td><td>'+(q.cve?'<a class="cve-link" href="https://nvd.nist.gov/vuln/detail/'+App.esc(q.cve)+'" target="_blank">'+App.esc(q.cve)+'</a>':'<span class="dimmed">\u2014</span>')+'</td><td class="dimmed" style="font-size:11px">'+App.esc(q.reason)+'</td></tr>';
+  /* ═══ QUARANTINE ═══ */    _qSeverity:null,_qTime:null,_qSearch:null,
+  buildQuarantine(){
+    var self=this;var Q=App.data.quarantine||[];
+    // Wire filter events
+    var qSev=App.$('q-severity');var qTime=App.$('q-time');var qSearch=App.$('q-search');
+    if(qSev&&!qSev._wired){qSev._wired=true;[...new Set(Q.map(function(q){return q.severity;}))].sort().forEach(function(s){var o=document.createElement('option');o.value=s;o.textContent=s;qSev.appendChild(o);});qSev.addEventListener('change',function(){self._qSeverity=qSev.value;self._renderQuarantine();});}
+    if(qTime&&!qTime._wired){qTime._wired=true;qTime.addEventListener('change',function(){self._qTime=qTime.value;self._renderQuarantine();});}
+    if(qSearch&&!qSearch._wired){qSearch._wired=true;qSearch.addEventListener('input',function(){self._qSearch=qSearch.value;self._renderQuarantine();});}
+    this._renderQuarantine();
+  },
+  _renderQuarantine(){
+    var Q=App.data.quarantine||[];var qb=App.$('q-body');if(!qb)return;
+    var sev=this._qSeverity||'';var time=this._qTime||'';var search=(this._qSearch||'').toLowerCase();
+    var filtered=Q.filter(function(q){
+      if(sev&&q.severity!==sev)return false;
+      if(time&&q.found_at){
+        var found=new Date(q.found_at);var now=new Date();
+        if(time==='24h'&&((now-found)>86400000))return false;
+        if(time==='7d'&&((now-found)>604800000))return false;
+        if(time==='30d'&&((now-found)>2592000000))return false;
+      }
+      if(search){var hay=((q.title||'')+(q.cve||'')+(q.product||'')+(q.reason||'')).toLowerCase();if(hay.indexOf(search)<0)return false;}
+      return true;
+    });
+    var badge=App.$('q-badge');if(badge)badge.textContent=filtered.length+' quarantined';
+    if(!filtered.length){qb.innerHTML='<tr><td colspan="7"><div class="empty-state" style="padding:var(--space-5)"><p class="empty-state-title">No Quarantined Findings</p></div></td></tr>';return;}
+    qb.innerHTML=filtered.map(function(q){
+      var dateStr=q.found_at?new Date(q.found_at).toLocaleDateString():'\u2014';
+      return '<tr><td>'+App.esc(q.product)+'</td><td>'+App.esc(q.scanner)+'</td><td><span class="badge '+App.sevClass(q.severity)+'">'+App.esc(q.severity)+'</span></td><td>'+App.esc(q.title)+'</td><td>'+(q.cve?'<a class="cve-link" href="https://nvd.nist.gov/vuln/detail/'+App.esc(q.cve)+'" target="_blank">'+App.esc(q.cve)+'</a>':'<span class="dimmed">\u2014</span>')+'</td><td class="dimmed" style="font-size:11px">'+App.esc(q.reason)+'</td><td class="dimmed" style="font-size:11px">'+dateStr+'</td></tr>';
     }).join('');
   },
 
@@ -1086,7 +1169,8 @@ const App={
       ptw.innerHTML='<table class="data-table"><thead><tr><th>Product</th><th>URL</th><th>Owner</th><th>Criticality</th><th>Findings</th><th>Critical/High</th><th>Actions</th></tr></thead><tbody>'+rows+'</tbody></table>';
       // Event delegation for scan buttons
       ptw.addEventListener('click',function(e){
-        var btn=e.target.closest('[data-scan]');if(btn)App.products.scan(btn.dataset.scan);
+        var scanBtn=e.target.closest('[data-scan]');if(scanBtn){App.products.scan(scanBtn.dataset.scan);return;}
+        var delBtn=e.target.closest('[data-delete]');if(delBtn){App.products.remove(delBtn.dataset.delete);}
       });
     },
     add(){
@@ -1115,8 +1199,60 @@ const App={
     scan(id){
       App.toast('Starting scan for '+id+'...','info');
       App.apiFetch('/api/scans/start',{method:'POST',body:JSON.stringify({product:id})}).then(function(data){
-        App.toast('Scan started. '+(data.jobs||[]).length+' scanner(s) queued.','success');
+        var jobCount=(data.jobs||[]).length;
+        App.toast('Scan started. '+jobCount+' scanner(s) queued.','success');
+        App._pollScansAndPipeline(id,jobCount);
       }).catch(function(e){App.toast('Scan failed: '+(e.message||'Network error'),'error');});
+    },
+    _pollScansAndPipeline(id,jobCount){
+      var elapsed=0;
+      var poll=function(){
+        elapsed+=5000;
+        App.apiFetch('/api/scans/jobs').then(function(data){
+          var jobs=(data.jobs||[]);
+          var running=jobs.filter(function(j){return j.status==='running'||j.status==='pending';});
+          if(running.length===0||elapsed>600000){
+            if(elapsed<=600000){
+              App.toast('Scans complete. Running pipeline...','info');
+              App.apiFetch('/api/pipeline/run',{method:'POST',body:JSON.stringify({})}).then(function(){
+                App.toast('Pipeline started. GitHub push runs in background.','success');
+              }).catch(function(e){App.toast('Pipeline failed: '+(e.message||'error'),'error');});
+            }
+          }else{
+            App.toast('Scanning... '+running.length+' still running ('+Math.round(elapsed/1000)+'s)','info');
+            setTimeout(poll,5000);
+          }
+        }).catch(function(){setTimeout(poll,10000);});
+      };
+      setTimeout(poll,5000);
+    },
+    remove(id){
+      if(!confirm('Delete product "'+id+'"?'))return;
+      App.apiFetch('/api/products/'+id,{method:'DELETE'}).then(function(data){
+        App.toast('Product '+id+' deleted.','success');
+        delete App.data.products[id];
+        App.products.init();
+      }).catch(function(e){
+        App.toast('Delete failed: '+(e.message||'Network error'),'error');
+      });
+    },
+    importFile(){
+      var fileInput=App.$('import-file');var source=App.$('import-source');
+      var msg=App.$('import-msg');
+      if(!fileInput||!fileInput.files.length){if(msg){msg.textContent='Select a file first';msg.style.color='#EF4444';}return;}
+      var file=fileInput.files[0];var sourceName=(source?source.value:'')||'external';
+      var formData=new FormData();
+      formData.append('file',file);
+      if(msg){msg.textContent='Importing...';msg.style.color='#3B82F6';}
+      fetch('/api/import/upload?source_name='+encodeURIComponent(sourceName),{
+        method:'POST',headers:{'Authorization':'Bearer '+document.cookie.match(/access_token=([^;]+)/)?.[1]||''},
+        body:file
+      }).then(function(r){return r.json();}).then(function(data){
+        if(data.error){if(msg){msg.textContent='Error: '+data.error;msg.style.color='#EF4444';}return;}
+        if(msg){msg.textContent='Imported '+data.imported+' findings from '+data.source;msg.style.color='#22C55E';}
+        App.toast('Imported '+data.imported+' findings','success');
+        fileInput.value='';
+      }).catch(function(e){if(msg){msg.textContent='Failed: '+e.message;msg.style.color='#EF4444';}});
     }
   },
 
@@ -1219,6 +1355,18 @@ const App={
         App.toast('Created '+total+' Issues.','success');
       }).catch(function(e){App.toast('Failed: '+(e.message||'Network error'),'error');});
     },
+    syncFromJira(){
+      App.toast('Syncing status from Jira...','info');
+      App.apiFetch('/api/jira/sync',{method:'POST'}).then(function(data){
+        App.toast('Synced '+data.synced+' findings from Jira (checked '+data.total_checked+').','success');
+      }).catch(function(e){App.toast('Jira sync failed: '+(e.message||'Not configured'),'error');});
+    },
+    syncFromGitHub(){
+      App.toast('Syncing status from GitHub...','info');
+      App.apiFetch('/api/github/sync',{method:'POST'}).then(function(data){
+        App.toast('Synced '+data.synced+' findings from GitHub (checked '+data.total_checked+').','success');
+      }).catch(function(e){App.toast('GitHub sync failed: '+(e.message||'Not configured'),'error');});
+    },
     checkDocker(){
       App.toast('Checking Docker...','info');
       App.apiFetch('/api/scanners/status').then(function(data){
@@ -1260,7 +1408,7 @@ const App={
       h+='<div style="margin-bottom:var(--space-3)"><div style="font-size:10px;font-weight:600;text-transform:uppercase;color:var(--text-muted)">Product</div><div style="font-size:var(--text-sm);color:var(--text-primary)">'+App.esc(f.product)+'</div></div>';
       h+='<div style="margin-bottom:var(--space-3)"><div style="font-size:10px;font-weight:600;text-transform:uppercase;color:var(--text-muted)">Severity</div><div><span class="badge '+App.sevClass(f.severity)+'">'+App.esc(f.severity)+'</span></div></div>';
       h+='<div style="margin-bottom:var(--space-3)"><div style="font-size:10px;font-weight:600;text-transform:uppercase;color:var(--text-muted)">Title</div><div style="font-size:var(--text-sm);color:var(--text-primary)">'+App.esc(f.title)+'</div></div>';
-      if(f.cve)h+='<div style="margin-bottom:var(--space-3)"><div style="font-size:10px;font-weight:600;text-transform:uppercase;color:var(--text-muted)">CVE</div><div><a class="cve-link" href="https://nvd.nist.gov/vuln/detail/'+App.esc(f.cve)+'" target="_blank">'+App.esc(f.cve)+'</a></div></div>';
+      if(f.cve){var at2=f.advisory_type||'';var idLbl=at2==='ghsa'?'GHSA':at2==='nswg'?'NSWG':'CVE';var idLnk=at2==='ghsa'?'<a class="cve-link" href="https://github.com/advisories/'+App.esc(f.cve)+'" target="_blank">'+App.esc(f.cve)+'</a>':at2==='nswg'?'<span class="cve-link">'+App.esc(f.cve)+'</span>':'<a class="cve-link" href="https://nvd.nist.gov/vuln/detail/'+App.esc(f.cve)+'" target="_blank">'+App.esc(f.cve)+'</a>';h+='<div style="margin-bottom:var(--space-3)"><div style="font-size:10px;font-weight:600;text-transform:uppercase;color:var(--text-muted)">'+idLbl+'</div><div>'+idLnk+'</div></div>';}
       if(f.cwe)h+='<div style="margin-bottom:var(--space-3)"><div style="font-size:10px;font-weight:600;text-transform:uppercase;color:var(--text-muted)">CWE</div><div style="font-size:var(--text-xs);color:var(--text-secondary)">'+App.esc(f.cwe)+'</div></div>';
       if(f.endpoint)h+='<div style="margin-bottom:var(--space-3)"><div style="font-size:10px;font-weight:600;text-transform:uppercase;color:var(--text-muted)">Endpoint</div><div style="font-size:var(--text-xs);color:var(--text-secondary);word-break:break-all">'+App.esc(f.endpoint)+'</div></div>';
       h+='</div><div>';
@@ -1504,7 +1652,8 @@ const App={
       App.apiFetch('/api/config/keys').then(function(data){
         var keys=data.keys||{};
         // Update status badges for each group
-        var groups={ai:['groq_api_key','nvd_api_key'],github:['github_token'],jira:['jira_url','jira_user','jira_token','jira_project'],dd:['defectdojo_url','defectdojo_api_key']};
+        // API returns UPPERCASE keys (GITHUB_TOKEN, NVD_API_KEY, etc.)
+        var groups={ai:['GROQ_API_KEY','NVD_API_KEY'],github:['GITHUB_TOKEN'],jira:['JIRA_URL','JIRA_USER','JIRA_TOKEN','JIRA_PROJECT'],dd:['DEFECTDOJO_URL','DEFECTDOJO_API_KEY']};
         Object.keys(groups).forEach(function(g){
           var el=App.$('status-'+g);if(!el)return;
           var groupKeys=groups[g];
@@ -1543,7 +1692,7 @@ const App={
         return 'Keys saved and active!';
       },keys);
     },
-    testJira(){return this._apiCall('Testing','/api/jira/test','GET','jira-status',function(d){return d.connected?'Connected to '+App.esc(d.url||'Jira'):App.esc(d.error||'Not configured');});},
+    testJira(){return this._apiCall('Testing','/api/jira/test','POST','jira-status',function(d){return d.connected?'Connected to '+App.esc(d.url||'Jira'):App.esc(d.error||'Not configured');});},
     createJira(){return this._apiCall('Creating','/api/jira/create?threshold=60','POST','jira-status',function(d){return 'Created '+(d.created||0)+' issues';});},
     testDD(){return this._apiCall('Testing','/api/defectdojo/test','POST','dd-status',function(d){return d.connected?'Connected to '+App.esc(d.url||'DefectDojo'):App.esc(d.error||'Not configured');});},
     importDD(){return this._apiCall('Importing','/api/defectdojo/import?product_name=all','POST','dd-status',function(d){return App.esc(d.message||'Imported');});}
@@ -1561,6 +1710,36 @@ if(document.readyState!=='loading'){App.init();}else{document.addEventListener('
 </body>
 </html>"""
 
+
+# ─────────────────────────── empty dashboard ──────────────────────────────────
+
+_EMPTY_DASHBOARD = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Risk Intelligence — Empty</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#0a0e17;color:#e2e8f0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh}
+.card{background:#111827;border:1px solid #1f2937;border-radius:12px;padding:48px 64px;text-align:center;max-width:520px}
+.icon{font-size:64px;margin-bottom:24px}
+h1{font-size:24px;margin-bottom:12px;color:#f9fafb}
+p{color:#9ca3af;font-size:15px;line-height:1.6;margin-bottom:24px}
+.badge{display:inline-block;background:#1e3a5f;color:#60a5fa;padding:6px 16px;border-radius:20px;font-size:13px;border:1px solid #2563eb}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="icon">📊</div>
+  <h1>No Data Yet</h1>
+  <p>Run the pipeline to generate findings, scores, and attack paths.<br><br>
+  <strong>Quick start:</strong><br>
+  <code style='color:#60a5fa'>python -m pipeline.run --reports scan_reports/ --config config.json --out outputs/</code></p>
+  <div class="badge">Pipeline not run</div>
+</div>
+</body>
+</html>"""
 
 # ─────────────────────────── build dashboard ──────────────────────────────────
 
@@ -1612,7 +1791,7 @@ def build_dashboard(
         "findings": _serialize_findings(ranked),
         "attack_paths": attack_paths,
         "history": history,
-        "quarantine": _serialize_quarantine(all_findings),
+        "quarantine": _serialize_quarantine(quarantine),
         "executive_brief": executive_brief,
         "products": products_config or {},
         "lifecycle": lifecycle_data,
@@ -1706,6 +1885,18 @@ def main() -> None:
         reverse=True,
     )
     summary = _derive_summary(all_findings, ranked)
+    # Override summary with actual pipeline stats from noise_reduction.json
+    nr_path = os.path.join(os.path.dirname(args.findings) or '.', 'noise_reduction.json')
+    if os.path.exists(nr_path):
+        try:
+            with open(nr_path) as nf:
+                nr = json.load(nf)
+            summary.raw_findings = nr.get('raw_findings', summary.raw_findings)
+            summary.unique_findings = nr.get('unique_findings', summary.unique_findings)
+            summary.quarantined = nr.get('quarantined', summary.quarantined)
+            summary.dedup_pct = nr.get('dedup_pct', summary.dedup_pct)
+        except Exception:
+            pass
 
     # Rebuild attack paths when config is available; degrade gracefully.
     attack_paths: Dict[str, List] = {}
@@ -1724,6 +1915,17 @@ def main() -> None:
     except FileNotFoundError:
         print(f"  [WARN] {args.config} not found — attack paths omitted")
 
+    # Load quarantine findings if available
+    quarantine_findings = []
+    quarantine_path = os.path.join(os.path.dirname(args.findings) or '.', 'quarantine_findings.json')
+    if os.path.exists(quarantine_path):
+        try:
+            with open(quarantine_path) as qf:
+                qdata = json.load(qf)
+            quarantine_findings = [Finding(**{k: v for k, v in item.items() if k not in ('raw',)}) for item in qdata]
+        except Exception:
+            pass
+
     build_dashboard(
         args.out,
         all_findings,
@@ -1731,7 +1933,7 @@ def main() -> None:
         summary,
         attack_paths,
         history={},
-        quarantine=all_findings,
+        quarantine=quarantine_findings or all_findings,
         products_config=products_config,
     )
     print(f"Dashboard generated: {args.out}")

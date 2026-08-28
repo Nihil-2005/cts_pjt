@@ -27,7 +27,7 @@ class GitHubTickets:
         url = f"{API}{path}"
         data = json.dumps(body).encode() if body is not None else None
         last_err: Optional[Exception] = None
-        for attempt in range(3):
+        for attempt in range(5):
             req = urllib.request.Request(url, data=data, method=method)
             req.add_header("Authorization", f"Bearer {self.token}")
             req.add_header("Accept", "application/vnd.github+json")
@@ -39,15 +39,29 @@ class GitHubTickets:
                     raw = resp.read().decode()
                     return json.loads(raw) if raw else {}
             except urllib.error.HTTPError as exc:
-                err_body = exc.read().decode()[:300]
+                err_body = exc.read().decode()[:500]
+                if exc.code == 403 and "rate limit" in err_body.lower():
+                    retry_after = int(exc.headers.get("Retry-After", 60)) if hasattr(exc, 'headers') else 60
+                    wait = max(retry_after, 2 ** (attempt + 2))
+                    last_err = GitHubError(f"Rate limited, waiting {wait}s")
+                    time.sleep(wait)
+                    continue
+                if exc.code == 422 and "secondary rate limit" in err_body.lower():
+                    retry_after = int(exc.headers.get("Retry-After", 300)) if hasattr(exc, 'headers') else 300
+                    wait = max(retry_after, 2 ** (attempt + 3))
+                    last_err = GitHubError(f"Secondary rate limit, waiting {wait}s")
+                    time.sleep(wait)
+                    continue
                 if exc.code == 429 or exc.code >= 500:
-                    last_err = GitHubError(f"GitHub {method} {path} -> HTTP {exc.code}: {err_body}")
-                    time.sleep(2**attempt)
+                    retry_after = int(exc.headers.get("Retry-After", 0)) if hasattr(exc, 'headers') else 0
+                    wait = max(retry_after, 2 ** (attempt + 2))
+                    last_err = GitHubError(f"GitHub {method} {path} -> HTTP {exc.code}")
+                    time.sleep(wait)
                     continue
                 raise GitHubError(f"GitHub {method} {path} -> HTTP {exc.code}: {err_body}")
             except (urllib.error.URLError, TimeoutError, OSError) as exc:
                 last_err = exc
-                time.sleep(2**attempt)
+                time.sleep(2 ** (attempt + 1))
         raise GitHubError(f"GitHub {method} {path} failed after retries: {last_err}")
 
     def _comment_on_issue(self, tracked, f: Finding) -> None:
@@ -69,6 +83,44 @@ class GitHubTickets:
                 break
             page += 1
         return titles
+
+    def get_issue_status(self, issue_number: int) -> Dict[str, Any]:
+        """Get GitHub issue state (open/closed)."""
+        try:
+            data = self._request("GET", f"/repos/{self.repo}/issues/{issue_number}")
+            state = data.get("state", "")
+            return {"number": issue_number, "state": state,
+                    "lifecycle_status": "fixed" if state == "closed" else "open",
+                    "title": data.get("title", "")}
+        except Exception as e:
+            return {"number": issue_number, "error": str(e)}
+
+    def sync_from_github(self, lifecycle_manager) -> Dict[str, Any]:
+        """Pull GitHub issue state changes into the lifecycle tracker."""
+        if not self.token or self.dry_run:
+            return {"synced": 0, "error": "GitHub not configured"}
+        updated = 0
+        rows = lifecycle_manager.conn.execute(
+            "SELECT finding_id, issue_url, status FROM tracked_findings WHERE issue_url IS NOT NULL"
+        ).fetchall()
+        for row in rows:
+            finding_id = row["finding_id"]
+            issue_url = row["issue_url"] or ""
+            current_status = row["status"]
+            if current_status in ("fixed", "false_positive", "risk_accepted"):
+                continue
+            issue_num = _issue_number_from_url(issue_url)
+            if not issue_num:
+                continue
+            gh_status = self.get_issue_status(issue_num)
+            if "error" in gh_status:
+                continue
+            new_status = gh_status.get("lifecycle_status", "")
+            if new_status and new_status != current_status:
+                lifecycle_manager.transition_status(
+                    finding_id, new_status, f"synced from GitHub #{issue_num} ({gh_status.get('state', '')})")
+                updated += 1
+        return {"synced": updated, "total_checked": len(rows)}
 
     def create_tickets(self, findings: List[Finding], threshold: float = 60.0,
                        labels: List[str] = None, lifecycle=None) -> Dict[str, Any]:

@@ -1,0 +1,54 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Python
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Logs
+*.log
+logs.txt
+
+# Outputs (will be mounted as volumes)
+outputs/
+scan_reports/
+intel/
+
+# Test files
+tests/
+pipeline/tests/
+
+# Documentation
+README.md
+*.md
+
+# Temp/debug files
+_*.py
+_*.js
+_*.html
+*.csv
+.last_update
+.env
+.secret
+
+# Docker compose files
+docker-compose*.yml
+Dockerfile*
+
+# Shell scripts
+*.sh
+*.bat
+Makefile

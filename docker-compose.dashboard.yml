@@ -1,0 +1,124 @@
+# DevSecOps Dashboard — Always-On Mode
+# Usage:
+#   docker compose -f docker-compose.dashboard.yml up -d
+#   docker compose -f docker-compose.dashboard.yml down
+#
+# The dashboard reads from mounted volumes:
+#   - outputs/      (dashboard HTML, lifecycle DB)
+#   - .env          (API keys)
+#   - config.json   (product config)
+#   - scan_reports/ (scanner output)
+
+services:
+  # ─── Dashboard Server ───────────────────────────────────────────
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.dashboard
+    container_name: devsecops-dashboard
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ./outputs:/app/outputs
+      - ./.env:/app/.env
+      - ./config.json:/app/config.json
+      - /var/run/docker.sock:/var/run/docker.sock
+      - scan-reports-vol:/app/scan_reports
+    environment:
+      - PORT=8000
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - devsecops-net
+
+  # ─── Target Apps (vulnerable webapps for scanning) ──────────────
+
+  juiceshop:
+    image: bkimminich/juice-shop:v15.3.0
+    container_name: juiceshop
+    ports:
+      - "127.0.0.1:3000:3000"
+    healthcheck:
+      test: ["CMD", "/nodejs/bin/node", "-e", "require('http').get('http://127.0.0.1:3000/',r=>process.exit(r.statusCode<500?0:1)).on('error',()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - devsecops-net
+
+  nodegoat-mongo:
+    image: mongo:4.4
+    container_name: nodegoat-mongo
+    ports:
+      - "127.0.0.1:27017:27017"
+    volumes:
+      - nodegoat-mongo-data:/data/db
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mongo", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - devsecops-net
+
+  nodegoat:
+    build:
+      context: https://github.com/OWASP/NodeGoat.git
+      dockerfile: Dockerfile
+    container_name: nodegoat
+    ports:
+      - "127.0.0.1:4000:4000"
+    command: npm start
+    environment:
+      - NODE_ENV=development
+      - MONGODB_URI=mongodb://nodegoat-mongo:27017/nodegoat
+    depends_on:
+      nodegoat-mongo:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"require('http').get('http://127.0.0.1:4000/',r=>process.exit(r.statusCode<500?0:1)).on('error',()=>process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+    restart: unless-stopped
+    networks:
+      - devsecops-net
+
+  bwapp:
+    image: raesene/bwapp:latest
+    container_name: bwapp
+    ports:
+      - "127.0.0.1:8080:80"
+    environment:
+      - MYSQL_ROOT_PASSWORD=bug
+      - APACHE_RUN_USER=www-data
+      - APACHE_RUN_GROUP=www-data
+      - APACHE_LOG_DIR=/var/log/apache2
+      - APACHE_LOCK_DIR=/var/run/apache2
+      - APACHE_PID_FILE=/var/run/apache2/apache2.pid
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/80'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - devsecops-net
+
+networks:
+  devsecops-net:
+    driver: bridge
+
+volumes:
+  nodegoat-mongo-data:
+  scan-reports-vol:

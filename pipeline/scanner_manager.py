@@ -74,6 +74,88 @@ def get_manager() -> "ScannerManager":
     return _manager_instance
 
 
+def _resolve_host_path(container_path: str) -> str:
+    """Resolve a container-internal path to the host Docker mount path.
+
+    When running inside Docker, `-v host_path:/app/scan_reports` means the
+    scanner containers must mount `host_path`, not `/app/scan_reports`.
+    We detect the host path by inspecting our own container's mounts.
+    """
+    if not os.path.exists("/.dockerenv"):
+        return container_path  # Not in Docker, path is already host path
+
+    # Try to read /proc/self/mountinfo to find the host path
+    # Format: mount_id parent_id major:minor root mount_point ...
+    # root (parts[3]) = host source path, mount_point (parts[4]) = container dest
+    try:
+        with open("/proc/self/mountinfo") as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) >= 5 and parts[4] == container_path:
+                    host_path = parts[3]  # root = host source path
+                    if host_path and host_path != container_path:
+                        return host_path
+    except Exception:
+        pass
+
+    # Fallback: use docker inspect on our own container
+    try:
+        import subprocess as _sp
+        hostname = os.environ.get("HOSTNAME", "")
+        if hostname:
+            result = _sp.run(
+                ["docker", "inspect", hostname],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode == 0:
+                import json as _json
+                info = _json.loads(result.stdout)
+                if info and isinstance(info, list):
+                    mounts = info[0].get("Mounts", [])
+                    for m in mounts:
+                        if m.get("Destination") == container_path:
+                            host_src = m.get("Source", "")
+                            if host_src and os.path.exists(host_src):
+                                return host_src
+    except Exception:
+        pass
+
+    return container_path  # Fallback to container path
+
+
+def _get_scan_volume() -> str:
+    """Determine the Docker volume name for scanner output.
+
+    On Docker Desktop, host paths from /proc/self/mountinfo don't work
+    when passed to docker run -v. Instead, use a Docker named volume
+    that both the dashboard and scanner containers share.
+    """
+    if not os.path.exists("/.dockerenv"):
+        return ""  # Not in Docker, use host path
+
+    # The compose file creates 'devsecops-pipeline_scan-reports-vol'
+    import subprocess as _sp
+    compose_vol = "devsecops-pipeline_scan-reports-vol"
+    standalone_vol = "devsecops-scan-reports"
+
+    # Check which volume exists
+    try:
+        result = _sp.run(["docker", "volume", "inspect", compose_vol],
+                        capture_output=True, text=True, timeout=5)
+        if result.returncode == 0:
+            return compose_vol
+    except Exception:
+        pass
+
+    # Fallback: create standalone volume
+    try:
+        _sp.run(["docker", "volume", "create", standalone_vol],
+                capture_output=True, timeout=5)
+    except Exception:
+        pass
+    return standalone_vol
+
+
 class ScannerManager:
     def __init__(self, reports_dir: str = "scan_reports"):
         self.reports_dir = os.path.abspath(reports_dir)
@@ -81,8 +163,10 @@ class ScannerManager:
         self._jobs: Dict[str, ScanJob] = {}
         self._callbacks: List[Callable] = []
         self._lock = threading.Lock()
-        self._scan_semaphore = threading.Semaphore(1)
+        self._scan_semaphore = threading.Semaphore(3)
         self._job_counter = 0
+        # Named volume for scanner containers (works on Docker Desktop)
+        self._scan_volume = _get_scan_volume()
 
     def on_status_change(self, callback: Callable[[ScanJob], None]):
         with self._lock:
@@ -119,9 +203,17 @@ class ScannerManager:
     def check_app_status(self, url: str, timeout: int = 5) -> Dict[str, Any]:
         import urllib.request
         import urllib.error
+        import os as _os
         start = time.time()
+
+        # Inside Docker, localhost refers to the container itself.
+        # Replace with host.docker.internal to reach host services.
+        check_url = url
+        if _os.path.exists("/.dockerenv") and "localhost" in check_url:
+            check_url = check_url.replace("localhost", "host.docker.internal")
+
         try:
-            req = urllib.request.Request(url, method="HEAD")
+            req = urllib.request.Request(check_url, method="HEAD")
             resp = urllib.request.urlopen(req, timeout=timeout)
             return {"url": url, "status": "up", "status_code": resp.status,
                     "response_time_ms": round((time.time() - start) * 1000)}
@@ -148,20 +240,50 @@ class ScannerManager:
         job.image = image
         output_name = f"{job.product}_{job.scanner}.json"
         container_name = f"scanner-{job.scanner}-{job.product}"
-        host_access = target_url.replace("localhost", "host.docker.internal")
         res = SCANNER_RESOURCES.get(job.scanner, {"memory": "1g", "cpus": "1.0"})
         resource_flags = ["--memory", res["memory"], "--cpus", res["cpus"]]
 
+        # Detect Docker network — use devsecops-net if dashboard runs in compose
+        # When on the compose network, use container names directly
+        # (e.g. http://juiceshop:3000) instead of host.docker.internal
+        use_compose_net = False
+        network_flags = ["--network", "host"]
+        import subprocess as _sp
+        try:
+            _sp.run(["docker", "network", "inspect", "devsecops-pipeline_devsecops-net"],
+                    capture_output=True, timeout=5)
+            use_compose_net = True
+            network_flags = ["--network", "devsecops-pipeline_devsecops-net"]
+        except Exception:
+            pass
+
+        # Map product names to container names on the compose network
+        product_to_container = {
+            "juice_shop": "juiceshop",
+            "juiceshop": "juiceshop",
+            "nodegoat": "nodegoat",
+            "bwapp": "bwapp",
+        }
+        if use_compose_net and job.product in product_to_container:
+            container_name_url = product_to_container[job.product]
+            port = target_url.split(":")[-1].split("/")[0] if ":" in target_url else "80"
+            host_access = f"http://{container_name_url}:{port}"
+        else:
+            host_access = target_url.replace("localhost", "host.docker.internal")
+
         if job.scanner == "nuclei":
-            return ["docker", "run", "--rm", "--name", container_name] + resource_flags + [
-                "--add-host=host.docker.internal:host-gateway", "-v", f"{self.reports_dir}:/out",
-                image, "-u", host_access, "-c", "25", "-rl", "150", "-timeout", "10",
-                "-retries", "1", "-dast", "-tags", "xss,sqli,lfi,rce,ssrf,xxe,redirect,crlf,command-injection",
-                "-jsonl", "-o", f"/out/{output_name}", "-silent", "-nc",
+            return ["docker", "run", "--rm", "--name", container_name] + resource_flags + network_flags + [
+                "--add-host=host.docker.internal:host-gateway", "-v", f"{self._scan_volume}:/out",
+                image, "-u", host_access,
+                "-severity", "critical,high,medium,low",
+                "-timeout", "30", "-retries", "2",
+                "-jsonl", "-o", f"/out/{output_name}", "-nc",
             ]
         elif job.scanner == "zap":
-            return ["docker", "run", "--rm", "--name", container_name] + resource_flags + [
-                "--add-host=host.docker.internal:host-gateway", "-v", f"{self.reports_dir}:/zap/wrk",
+            return ["docker", "run", "--rm", "--name", container_name] + resource_flags + network_flags + [
+                "--add-host=host.docker.internal:host-gateway",
+                "--user", "root",
+                "-v", f"{self._scan_volume}:/zap/wrk",
                 image, "zap-baseline.py", "-t", host_access, "-J", output_name,
             ]
         elif job.scanner == "trivy":
@@ -169,23 +291,30 @@ class ScannerManager:
             if not os.path.exists(docker_sock):
                 docker_sock = "//var/run/docker.sock"
             return ["docker", "run", "--rm", "--name", container_name] + resource_flags + [
-                "-v", f"{self.reports_dir}:/out", "-v", f"{docker_sock}:/var/run/docker.sock",
+                "-v", f"{self._scan_volume}:/out", "-v", f"{docker_sock}:/var/run/docker.sock",
                 image, "image", "--format", "json", "-o", f"/out/{output_name}",
                 self._resolve_trivy_image(target_url),
             ]
         elif job.scanner == "wapiti":
-            return ["docker", "run", "--rm", "--name", container_name] + resource_flags + [
-                "--add-host=host.docker.internal:host-gateway", "-v", f"{self.reports_dir}:/out",
+            return ["docker", "run", "--rm", "--name", container_name] + resource_flags + network_flags + [
+                "--add-host=host.docker.internal:host-gateway", "-v", f"{self._scan_volume}:/out",
                 image, "-u", host_access, "-f", "json", "-o", f"/out/{output_name}",
-                "--max-depth", "3", "--max-links-per-page", "100", "-t", "15",
+                "-t", "10", "--level", "1",
             ]
         elif job.scanner == "nmap":
-            return ["docker", "run", "--rm", "--name", container_name] + resource_flags + [
-                "--add-host=host.docker.internal:host-gateway", "-v", f"{self.reports_dir}:/out",
-                image, "-sV", "--script", "vuln,exploit", "-oX",
-                f"/out/{job.product}_{job.scanner}.xml", "-T4", "--open",
-                host_access.replace("http://", "").replace("https://", "").rstrip("/"),
-            ]
+            # Parse host and port separately — nmap needs host -p port
+            from urllib.parse import urlparse as _urlparse
+            parsed = _urlparse(host_access)
+            nmap_host = parsed.hostname or host_access
+            nmap_port = parsed.port
+            nmap_flags = ["-p-", "-oX", f"/out/{job.product}_{job.scanner}.xml"]
+            if nmap_port:
+                nmap_flags = ["-p", str(nmap_port), "-oX", f"/out/{job.product}_{job.scanner}.xml"]
+            return ["docker", "run", "--rm", "--name", container_name] + resource_flags + network_flags + [
+                "--add-host=host.docker.internal:host-gateway", "-v", f"{self._scan_volume}:/out",
+                image, "-sV", "-sC", "--script", "vulners,default",
+                "--script-timeout", "120s",
+            ] + nmap_flags + ["-T4", "--open", nmap_host]
         else:
             raise ValueError(f"Unknown scanner: {job.scanner}")
 
@@ -220,15 +349,17 @@ class ScannerManager:
             job.started_at = time.time()
             self._notify(job)
 
-            try:
-                target_url = self._validate_target_url(target_url)
-            except ValueError as e:
-                job.status = ScannerStatus.FAILED
-                job.error = f"Invalid target URL: {e}"
-                job.finished_at = time.time()
-                job.logs.append(f"[ERROR] Invalid target URL: {e}")
-                self._notify(job)
-                return
+            # Skip URL validation for trivy (uses container names, not HTTP URLs)
+            if job.scanner != "trivy":
+                try:
+                    target_url = self._validate_target_url(target_url)
+                except ValueError as e:
+                    job.status = ScannerStatus.FAILED
+                    job.error = f"Invalid target URL: {e}"
+                    job.finished_at = time.time()
+                    job.logs.append(f"[ERROR] Invalid target URL: {e}")
+                    self._notify(job)
+                    return
 
             cmd = self._build_docker_run_cmd(job, target_url)
             job.logs.append(f"[START] {' '.join(cmd)}")
@@ -262,9 +393,14 @@ class ScannerManager:
 
             job.exit_code = process.returncode
             job.finished_at = time.time()
-            job.status = ScannerStatus.COMPLETED if process.returncode == 0 else ScannerStatus.FAILED
-            if process.returncode != 0:
+            # Exit 0 = success, exit 1 = failure, exit 2 = warnings (ZAP uses 2 for findings)
+            success_codes = {0, 2} if job.scanner == "zap" else {0}
+            job.status = ScannerStatus.COMPLETED if process.returncode in success_codes else ScannerStatus.FAILED
+            if process.returncode not in success_codes:
                 job.error = f"Exit code {process.returncode}"
+            else:
+                # Copy results from Docker volume back to host reports_dir
+                self._copy_results_to_host(job)
         except Exception as e:
             job.status = ScannerStatus.FAILED
             job.error = str(e)
@@ -273,6 +409,31 @@ class ScannerManager:
         finally:
             self._notify(job)
             self._scan_semaphore.release()
+
+    def _copy_results_to_host(self, job: ScanJob) -> None:
+        """Copy scanner output from Docker volume to host reports_dir.
+
+        After a scanner container completes, its output lives in the Docker
+        named volume. This copies it back to the host-mounted reports_dir
+        so the pipeline can read it locally.
+        """
+        if not self._scan_volume or not os.path.exists("/.dockerenv"):
+            return  # Not in Docker or no volume
+        output_name = f"{job.product}_{job.scanner}.json"
+        xml_name = f"{job.product}_{job.scanner}.xml"
+        try:
+            import subprocess as _sp
+            for fname in [output_name, xml_name]:
+                _sp.run(
+                    ["docker", "run", "--rm",
+                     "-v", f"{self._scan_volume}:/vol:ro",
+                     "-v", f"{self.reports_dir}:/host",
+                     "alpine", "sh", "-c",
+                     f"test -f /vol/{fname} && cp /vol/{fname} /host/ && echo copied {fname}"],
+                    capture_output=True, text=True, timeout=10,
+                )
+        except Exception:
+            pass  # Best-effort copy
 
     def start_product_scans(self, product_id: str, product_config: Dict, scanners: Optional[List[str]] = None) -> List[ScanJob]:
         url = product_config.get("url", "")

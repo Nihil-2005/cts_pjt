@@ -227,7 +227,6 @@ class ScanRequest(BaseModel):
 
 class PipelineRequest(BaseModel):
     products: Optional[List[str]] = None
-    skip_enrich: bool = False
     skip_ai: bool = True
 
 
@@ -235,7 +234,7 @@ class PipelineRequest(BaseModel):
 
 
 @app.post("/api/login", response_model=LoginResponse)
-@limiter.limit("5/minute")
+@limiter.limit("20/minute")
 async def login(request: Request, req: LoginRequest):
     """Authenticate and get JWT token (rate-limited)."""
     if not authenticate(req.username, req.password):
@@ -440,6 +439,28 @@ async def product_scan_status(product_id: str, user: str = Depends(get_current_u
 _pipeline_lock = threading.Lock()
 
 
+def _run_pipeline_background():
+    """Start pipeline in a background thread (non-blocking)."""
+    if not _pipeline_lock.acquire(blocking=False):
+        return  # Already running
+    def _run():
+        try:
+            from . import run as pipeline_run
+            cfg = _load_config()
+            manager = get_manager()
+            pipeline_run.run_pipeline(
+                reports_dir=manager.get_reports_dir(),
+                config=cfg,
+                out_dir="outputs",
+                skip_ai=True,
+            )
+        except Exception as e:
+            print(f"[PIPELINE ERROR] {e}")
+        finally:
+            _pipeline_lock.release()
+    threading.Thread(target=_run, daemon=True).start()
+
+
 @app.post("/api/pipeline/run")
 async def run_pipeline(req: PipelineRequest, user: str = Depends(get_current_user)):
     """Run the full 9-stage pipeline. Runs in background thread."""
@@ -458,7 +479,7 @@ async def run_pipeline(req: PipelineRequest, user: str = Depends(get_current_use
                 config=cfg,
                 out_dir="outputs",
                 products=req.products,
-                skip_enrich=req.skip_enrich,
+
                 skip_ai=req.skip_ai,
             )
         except Exception as e:
@@ -539,6 +560,53 @@ async def create_tickets(
             lifecycle_mgr.close()
 
     return {"results": result, "dry_run": dry_run}
+
+
+@app.post("/api/jira/sync")
+async def jira_sync(user: str = Depends(get_current_user)):
+    """Pull Jira status changes into the lifecycle tracker."""
+    from .jira_client import JiraClient
+    from .lifecycle import LifecycleManager
+
+    client = JiraClient()
+    if not client.configured:
+        raise HTTPException(status_code=400, detail="JIRA not configured")
+
+    lc = LifecycleManager("outputs/lifecycle.db")
+    try:
+        result = client.sync_from_jira(lc)
+    finally:
+        lc.close()
+    return result
+
+
+@app.get("/api/jira/status/{issue_key}")
+async def jira_issue_status(issue_key: str, user: str = Depends(get_current_user)):
+    """Get Jira issue status."""
+    from .jira_client import JiraClient
+    client = JiraClient()
+    if not client.configured:
+        raise HTTPException(status_code=400, detail="JIRA not configured")
+    return client.get_issue_status(issue_key)
+
+
+@app.post("/api/github/sync")
+async def github_sync(user: str = Depends(get_current_user)):
+    """Pull GitHub issue state changes into the lifecycle tracker."""
+    from . import github_tickets
+    from .lifecycle import LifecycleManager
+
+    token = os.environ.get("GITHUB_TOKEN", "")
+    repo = os.environ.get("GITHUB_REPO", "")
+    if not token or not repo:
+        raise HTTPException(status_code=400, detail="GITHUB_TOKEN or GITHUB_REPO not configured")
+    gh_client = github_tickets.GitHubTickets(repo, token)
+    lc = LifecycleManager("outputs/lifecycle.db")
+    try:
+        result = gh_client.sync_from_github(lc)
+    finally:
+        lc.close()
+    return result
 
 
 # ─── Lifecycle routes ─────────────────────────────────────────────────────
@@ -651,23 +719,10 @@ async def update_config_keys(req: ApiKeysUpdate, user: str = Depends(get_current
             if overwrite or env_key not in existing:
                 existing[env_key] = v
 
-    # Write back atomically via temp file + rename
-    import tempfile
-
-    fd, tmp_path = tempfile.mkstemp(
-        dir=os.path.dirname(env_path) or ".", suffix=".env.tmp"
-    )
-    try:
-        with os.fdopen(fd, "w") as f:
-            for k, v in existing.items():
-                f.write(f"{k}={v}\n")
-        os.replace(tmp_path, env_path)
-    except Exception:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        raise
+    # Write back directly — atomic replace doesn't work on Docker mounted volumes
+    with open(env_path, "w") as f:
+        for k, v in existing.items():
+            f.write(f"{k}={v}\n")
     try:
         os.chmod(env_path, stat.S_IRUSR | stat.S_IWUSR)  # 0o600 — owner read/write only
     except OSError:
@@ -849,6 +904,103 @@ async def defectdojo_import(product_name: str, user: str = Depends(get_current_u
     return import_to_defectdojo(findings, product_name)
 
 
+# ─── External findings import ────────────────────────────────────────────────
+
+
+@app.post("/api/import/findings")
+async def import_external_findings(
+    file: str = "",
+    source_name: str = "external_import",
+    user: str = Depends(get_current_user),
+):
+    """Import findings from an external file (JSON, XML, CSV, SARIF)."""
+    from . import external_import
+
+    if not file or not os.path.exists(file):
+        raise HTTPException(status_code=400, detail="Provide a valid file path")
+
+    try:
+        findings = external_import.import_file(file, source_name)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Import failed: {e}")
+
+    if not findings:
+        return {"imported": 0, "message": "No valid findings in file"}
+
+    # Save imported findings
+    import_dir = os.path.join("scan_reports", "imports")
+    os.makedirs(import_dir, exist_ok=True)
+    import_name = os.path.basename(file)
+    out_path = os.path.join(import_dir, f"{source_name}_{import_name}.json")
+
+    with open(out_path, "w", encoding="utf-8") as fh:
+        json.dump([f.to_dict() for f in findings], fh, indent=2)
+
+    return {
+        "imported": len(findings),
+        "source": source_name,
+        "file": out_path,
+        "by_severity": {
+            s: sum(1 for f in findings if f.severity == s)
+            for s in ["critical", "high", "medium", "low", "info"]
+        },
+    }
+
+
+@app.post("/api/import/upload")
+async def upload_and_import(
+    file: bytes = None,
+    source_name: str = "external_import",
+    user: str = Depends(get_current_user),
+):
+    """Upload a file and import findings."""
+    from . import external_import
+    import tempfile
+
+    if not file:
+        raise HTTPException(status_code=400, detail="No file uploaded")
+
+    # Detect format from content
+    content = file.decode("utf-8", errors="replace")
+    if content.strip().startswith("{") or content.strip().startswith("["):
+        ext = ".json"
+    elif content.strip().startswith("<?xml") or content.strip().startswith("<"):
+        ext = ".xml"
+    else:
+        ext = ".csv"
+
+    fd, tmp = tempfile.mkstemp(suffix=ext)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(content)
+        findings = external_import.import_file(tmp, source_name)
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+    if not findings:
+        return {"imported": 0, "message": "No valid findings"}
+
+    import_dir = os.path.join("scan_reports", "imports")
+    os.makedirs(import_dir, exist_ok=True)
+    out_path = os.path.join(import_dir, f"{source_name}_upload.json")
+
+    with open(out_path, "w", encoding="utf-8") as fh:
+        json.dump([f.to_dict() for f in findings], fh, indent=2)
+
+    # Auto-run pipeline in background
+    result = {"imported": len(findings), "source": source_name, "file": out_path}
+    try:
+        _run_pipeline_background()
+        result["pipeline"] = "started"
+    except Exception as e:
+        result["pipeline"] = f"failed: {e}"
+
+    return result
+
+
 # ─── Dedup analytics ────────────────────────────────────────────────────────
 
 
@@ -973,7 +1125,9 @@ async def serve_dashboard(request: Request, page: str = "overview"):
         raise HTTPException(status_code=403, detail="Access denied")
     if dashboard_path.exists():
         return FileResponse(str(dashboard_path), headers={"Cache-Control": "no-store"})
-    return HTMLResponse(_LOGIN_HTML)
+    # Dashboard HTML not generated yet — serve empty state
+    from .dashboard import _EMPTY_DASHBOARD
+    return HTMLResponse(_EMPTY_DASHBOARD, headers={"Cache-Control": "no-store"})
 
 
 @app.get("/dash-static/{fname}")
@@ -1055,7 +1209,7 @@ transition:opacity .2s;margin-top:8px}
     <button class="btn" type="submit" id="login-btn">Sign In</button>
     <div class="error" id="error-msg"></div>
   </form>
-  <div class="hint">Check server console for credentials</div>
+  <div class="hint"></div>
 </div>
 <script>
 document.getElementById('login-form').addEventListener('submit', async(e)=>{

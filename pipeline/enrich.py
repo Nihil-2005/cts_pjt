@@ -63,15 +63,25 @@ def _is_stale(path: str, max_age_days: int = 1) -> bool:
 
 class _RateLimiter:
     def __init__(self, calls: int, window: float):
-        self._sem = BoundedSemaphore(calls)
-        self._delay = window / calls
+        self._max = calls
+        self._window = window
+        self._timestamps: list = []
+        self._lock = __import__('threading').Lock()
 
     def acquire(self) -> None:
-        self._sem.acquire()
+        while True:
+            with self._lock:
+                now = time.time()
+                self._timestamps = [t for t in self._timestamps if now - t < self._window]
+                if len(self._timestamps) < self._max:
+                    self._timestamps.append(now)
+                    return
+                oldest = self._timestamps[0]
+                wait = self._window - (now - oldest) + 0.05
+            time.sleep(min(wait, 2.0))
 
     def release(self) -> None:
-        time.sleep(self._delay)
-        self._sem.release()
+        pass
 
 
 def _fetch_with_retry(fn, *args, max_attempts: int = 3, **kwargs) -> Any:
@@ -248,7 +258,7 @@ class Enricher:
             self.load_epss(cves)
             self.load_epss_trend(cves)
             if self.cfg.get("use_nvd", True):
-                needs_nvd = {f.cve.upper() for f in findings if f.cve and not _has_scanner_cvss(f)}
+                needs_nvd = {f.cve.upper() for f in findings if f.cve}
                 needs_nvd_list = [c for c in sorted(needs_nvd) if c not in self.nvd_map]
                 if needs_nvd_list:
                     self.load_nvd(needs_nvd_list)

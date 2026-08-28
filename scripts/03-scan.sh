@@ -98,13 +98,6 @@ is_local_target() {
     esac
 }
 
-is_local_target() {
-    case "$1" in
-        http://localhost:*|http://127.0.0.1:*|http://[::1]:*) return 0 ;;
-        *) return 1 ;;
-    esac
-}
-
 # Build resolved target list: entries become "name|url"
 ALL_TARGETS=("nodegoat|$(resolve_target_url nodegoat 4000)" \
              "juiceshop|$(resolve_target_url juiceshop 3000)" \
@@ -189,7 +182,7 @@ for entry in "${ALL_TARGETS[@]}"; do
     # bWAPP cold-start trap: an unconfigured install serves its setup wizard,
     # which scanners would happily 'find vulnerabilities' in.
     if [ "$NAME" = "bwapp" ]; then
-        BODY=$(curl -s --max-time 5 "$URL" 2>/dev/null
+        BODY=$(curl -s --max-time 5 "$URL" 2>/dev/null \
                curl -s --max-time 5 "$URL/login.php" 2>/dev/null || true)
         case "$BODY" in
             *install.php*)
@@ -463,11 +456,12 @@ for target_name in "${ALL_TARGETS[@]}"; do
     NAME="${target_name%%|*}"
     URL="${target_name##*|}"
 
-    NET_FLAG="--network=host"
-    if ! is_local_target "$URL"; then NET_FLAG=""; fi
+    # Nmap never uses --network=host (broken on Docker Desktop Windows/macOS)
+    # Always use host.docker.internal for host access
+    NET_FLAG=""
 
-    # Extract host:port from URL for nmap (nmap doesn't take URLs)
-    NMAP_TARGET=$(echo "$URL" | sed 's|https*://||' | sed 's|/$||')
+    # Extract host:port from URL for nmap, replace localhost with host.docker.internal
+    NMAP_TARGET=$(echo "$URL" | sed 's|https*://||' | sed 's|/$||' | sed 's|localhost|host.docker.internal|g')
 
     OUTPUT_XML="$SCAN_DIR/${NAME}_nmap.xml"
 
@@ -487,7 +481,7 @@ for target_name in "${ALL_TARGETS[@]}"; do
         -v "$SCAN_DIR":/out \
         instrumentisto/nmap:latest \
         -sV \
-        --script vuln,exploit \
+        --script vulners --script-timeout 60s \
         -oX "/out/${NAME}_nmap.xml" \
         -T4 \
         --open \

@@ -359,7 +359,9 @@ class LifecycleManager:
             "total_tracked": len(all_findings), "status_counts": status_counts,
             "overdue_count": len(breached), "overdue_findings": [f.to_dict() for f in breached[:20]],
             "recent_engagements": self.get_engagement_history()[:10],
-            "findings": [self._row_to_tracked(row).to_dict() for row in all_findings],
+            "findings": [{**self._row_to_tracked(row).to_dict(),
+                "advisory_type": ('cve' if (row['cve'] or '').startswith('CVE-') else 'ghsa' if (row['cve'] or '').startswith('GHSA-') else 'nswg' if (row['cve'] or '').startswith('NSWG-') else 'other' if row['cve'] else '')
+            } for row in all_findings],
         }
 
     def _finding_id(self, finding: Finding) -> str:

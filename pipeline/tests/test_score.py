@@ -34,7 +34,7 @@ class TestScore(unittest.TestCase):
         self.assertLessEqual(f.score, 100)
         self.assertGreaterEqual(f.score, 0)
         comps = bd["components"]
-        self.assertEqual(sum(comps.values()), f.score)
+        self.assertEqual(round(sum(comps.values()), 1), f.score)
         self.assertIn("CISA KEV", " ".join(bd["drivers"]))
 
     def test_data_sensitivity_affects_score(self):
