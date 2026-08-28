@@ -107,7 +107,8 @@ class GitHubTickets:
             finding_id = row["finding_id"]
             issue_url = row["issue_url"] or ""
             current_status = row["status"]
-            if current_status in ("fixed", "false_positive", "risk_accepted"):
+            # Skip business triage overrides, but allow open <-> fixed syncing with GitHub
+            if current_status in ("false_positive", "risk_accepted"):
                 continue
             issue_num = _issue_number_from_url(issue_url)
             if not issue_num:
@@ -123,7 +124,8 @@ class GitHubTickets:
         return {"synced": updated, "total_checked": len(rows)}
 
     def create_tickets(self, findings: List[Finding], threshold: float = 60.0,
-                       labels: List[str] = None, lifecycle=None) -> Dict[str, Any]:
+                       labels: List[str] = None, lifecycle=None,
+                       min_priority: Optional[str] = None) -> Dict[str, Any]:
         stats = {"created": 0, "skipped_duplicate": 0, "skipped_ticketed": 0,
                  "skipped_status": 0, "commented_reopened": 0, "below_threshold": 0, "errors": []}
         labels = labels or ["security", "auto-generated"]
@@ -133,11 +135,17 @@ class GitHubTickets:
             stats["errors"].append("No GitHub token configured")
             return stats
 
+        pri_filter = [p.strip().lower() for p in min_priority.split(",")] if min_priority else None
+
         for f in findings:
             if f.status != "active":
                 continue
             score = f.score or 0
-            if score < threshold:
+            if pri_filter:
+                if (f.priority or "").lower() not in pri_filter and score < threshold:
+                    stats["below_threshold"] += 1
+                    continue
+            elif score < threshold:
                 stats["below_threshold"] += 1
                 continue
             title = f"[{f.priority}] {f.title} ({f.product})"
@@ -207,7 +215,8 @@ def _issue_number_from_url(url: str) -> Optional[int]:
 
 def create_tickets_per_product(findings: List[Finding], products_config: Dict[str, Any],
                                token: str, threshold: float = 60.0, labels: List[str] = None,
-                               dry_run: bool = False, lifecycle=None) -> Dict[str, Any]:
+                               dry_run: bool = False, lifecycle=None,
+                               min_priority: Optional[str] = None) -> Dict[str, Any]:
     labels = labels or ["security", "auto-generated"]
     total_stats = {"created": 0, "skipped_duplicate": 0, "skipped_ticketed": 0,
                    "skipped_status": 0, "commented_reopened": 0, "below_threshold": 0,
@@ -226,7 +235,7 @@ def create_tickets_per_product(findings: List[Finding], products_config: Dict[st
             total_stats["per_product"][product_id] = {"skipped": True, "reason": "no github_repo"}
             continue
         gh = GitHubTickets(github_repo, token, dry_run=dry_run)
-        stats = gh.create_tickets(product_findings, threshold=threshold, labels=labels, lifecycle=lifecycle)
+        stats = gh.create_tickets(product_findings, threshold=threshold, labels=labels, lifecycle=lifecycle, min_priority=min_priority)
         for key in ("created", "skipped_duplicate", "skipped_ticketed", "skipped_status", "commented_reopened", "below_threshold"):
             total_stats[key] += stats.get(key, 0)
         total_stats["errors"].extend(stats["errors"])
@@ -239,7 +248,7 @@ def _issue_body(f: Finding) -> str:
     comps = (f.score_breakdown or {}).get("components", {})
     comp_table = "\n".join(f"| {k} | {v} |" for k, v in sorted(comps.items()))
     remediation = "\n".join(f"- **{s.get('kind')}:** {s.get('text', '')}" for s in (f.remediation_suggestions or []))
-    return f"""## 🚨 Risk Score: {f.score:.1f}/100 — {f.priority} (SLA: {f.sla_hours}h)
+    return f"""## 🚨 Risk Score: {(f.score or 0.0):.1f}/100 — {f.priority or 'N/A'} (SLA: {f.sla_hours or 0}h)
 
 | Field | Value |
 |-------|-------|

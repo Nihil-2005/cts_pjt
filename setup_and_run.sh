@@ -63,17 +63,28 @@ bash "$SCRIPTS/01-setup.sh"
 header "Stage 2/5: Starting Dashboard"
 info "Dashboard must be online before anything else..."
 
+if [ -f "$SCRIPT_DIR/.env" ]; then
+    ENV_PASS=$(grep "^DASHBOARD_PASS=" "$SCRIPT_DIR/.env" 2>/dev/null | cut -d'=' -f2- | tr -d '\r' || true)
+    if [ -n "$ENV_PASS" ]; then
+        DASHBOARD_PASS="$ENV_PASS"
+        export DASHBOARD_PASS
+    fi
+fi
+
 if [ -z "${DASHBOARD_PASS:-}" ]; then
     _VENV_PY=""
-    if [ -f "$SCRIPT_DIR/venv/Scripts/python.exe" ]; then
-        _VENV_PY="$SCRIPT_DIR/venv/Scripts/python.exe"
-    elif [ -f "$SCRIPT_DIR/venv/Scripts/python" ]; then
-        _VENV_PY="$SCRIPT_DIR/venv/Scripts/python"
-    elif [ -f "$SCRIPT_DIR/venv/bin/python" ]; then
+    if [ -f "$SCRIPT_DIR/venv/bin/python" ] && "$SCRIPT_DIR/venv/bin/python" -c "import sys" >/dev/null 2>&1; then
         _VENV_PY="$SCRIPT_DIR/venv/bin/python"
+    elif [ -f "$SCRIPT_DIR/venv/Scripts/python.exe" ] && "$SCRIPT_DIR/venv/Scripts/python.exe" -c "import sys" >/dev/null 2>&1; then
+        _VENV_PY="$SCRIPT_DIR/venv/Scripts/python.exe"
+    elif [ -f "$SCRIPT_DIR/venv/Scripts/python" ] && "$SCRIPT_DIR/venv/Scripts/python" -c "import sys" >/dev/null 2>&1; then
+        _VENV_PY="$SCRIPT_DIR/venv/Scripts/python"
     fi
-    DASHBOARD_PASS=$("${_VENV_PY:-python}" -c "import secrets; print(secrets.token_urlsafe(16))" 2>/dev/null || echo "changeme")
+    DASHBOARD_PASS=$("${_VENV_PY:-python3}" -c "import secrets; print(secrets.token_urlsafe(16))" 2>/dev/null || "${_VENV_PY:-python}" -c "import secrets; print(secrets.token_urlsafe(16))" 2>/dev/null || echo "changeme")
     export DASHBOARD_PASS
+    if [ -f "$SCRIPT_DIR/.env" ]; then
+        echo "DASHBOARD_PASS=$DASHBOARD_PASS" >> "$SCRIPT_DIR/.env"
+    fi
 fi
 info "Admin password: $DASHBOARD_PASS"
 

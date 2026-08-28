@@ -33,7 +33,7 @@ def compute_score(f: Finding, product_cfg: Dict, weights: Dict[str, Any]) -> Dic
         "asset": round(_clamp(asset / 10.0) * w["asset"], 1),
         "exposure": round(_clamp(exposure / 10.0) * w["exposure"], 1),
         "data": round(_clamp(data_sensitivity / 10.0) * w["data"], 1),
-        "patch": -round(_clamp(has_patch) * w["patch"], 1),
+        "patch": -round(_clamp(has_patch) * abs(w["patch"]), 1),
     }
     total = round(_clamp(sum(components.values())), 1)
 

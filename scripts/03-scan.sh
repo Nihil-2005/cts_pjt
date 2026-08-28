@@ -35,33 +35,36 @@ mkdir -p "$SCAN_DIR" "$TEMPLATE_DIR"
 
 # Find venv Python (Windows: Scripts/python.exe, Linux: bin/python)
 VENV_PYTHON=""
-if [ -f "$SCRIPT_DIR/venv/Scripts/python.exe" ]; then
-    VENV_PYTHON="$SCRIPT_DIR/venv/Scripts/python.exe"
-elif [ -f "$SCRIPT_DIR/venv/Scripts/python" ]; then
-    VENV_PYTHON="$SCRIPT_DIR/venv/Scripts/python"
-elif [ -f "$SCRIPT_DIR/venv/bin/python" ]; then
+if [ -f "$SCRIPT_DIR/venv/bin/python" ] && "$SCRIPT_DIR/venv/bin/python" -c "import sys" >/dev/null 2>&1; then
     VENV_PYTHON="$SCRIPT_DIR/venv/bin/python"
+elif [ -f "$SCRIPT_DIR/venv/Scripts/python.exe" ] && "$SCRIPT_DIR/venv/Scripts/python.exe" -c "import sys" >/dev/null 2>&1; then
+    VENV_PYTHON="$SCRIPT_DIR/venv/Scripts/python.exe"
+elif [ -f "$SCRIPT_DIR/venv/Scripts/python" ] && "$SCRIPT_DIR/venv/Scripts/python" -c "import sys" >/dev/null 2>&1; then
+    VENV_PYTHON="$SCRIPT_DIR/venv/Scripts/python"
 fi
 
 # Activate venv if available
 if [ -n "$VENV_PYTHON" ]; then
-    source "$SCRIPT_DIR/venv/Scripts/activate" 2>/dev/null || source "$SCRIPT_DIR/venv/bin/activate" 2>/dev/null || true
+    source "$SCRIPT_DIR/venv/bin/activate" 2>/dev/null || source "$SCRIPT_DIR/venv/Scripts/activate" 2>/dev/null || true
 fi
 
 PYTHON="${VENV_PYTHON:-$(command -v python3 2>/dev/null || command -v python 2>/dev/null || echo python)}"
 
 # Clean old reports — ARCHIVE, never delete (evidence survives across runs)
-if ls "$SCAN_DIR"/*.json >/dev/null 2>&1; then
+if [ -n "$(find "$SCAN_DIR" -maxdepth 1 -name '*.json' -print -quit 2>/dev/null)" ]; then
     TS=$(date +%Y-%m-%d_%H-%M-%S)
     ARCHIVE_DIR="$SCAN_DIR/archive/$TS"
     mkdir -p "$ARCHIVE_DIR"
     mv "$SCAN_DIR"/*.json "$ARCHIVE_DIR"/ 2>/dev/null || true
     info "Archived previous reports to scan_reports/archive/$TS/"
 fi
+
 # Keep only the 10 most recent archives
-ls -1dt "$SCAN_DIR"/archive/*/ 2>/dev/null | tail -n +11 | while read -r old; do
-    rm -rf "$old"
-done
+if [ -d "$SCAN_DIR/archive" ]; then
+    find "$SCAN_DIR/archive" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort -r | tail -n +11 | while read -r old; do
+        [ -n "$old" ] && rm -rf "$old" || true
+    done || true
+fi
 
 # ── Target overrides (from setup_and_run.sh --target flags) ────────────────
 # PIPELINE_TARGETS: space-separated "IP[:port]" or "product=IP[:port]" values.
@@ -159,9 +162,9 @@ for entry in "${ALL_TARGETS[@]}"; do
 
     READY=false
     for i in $(seq 1 5); do
-        # stdout redirected by the SHELL (not curl -o): immune to
-        # MSYS_NO_PATHCONV, which breaks literal /dev/null args on Windows curl
-        if curl -s --max-time 3 "$URL" >/dev/null 2>&1; then
+        if curl -s -k -L --max-time 5 "$URL" >/dev/null 2>&1 || \
+           curl -s -k -L --max-time 5 "${URL//127.0.0.1/localhost}" >/dev/null 2>&1 || \
+           curl -s -k -L --max-time 5 "${URL//localhost/127.0.0.1}" >/dev/null 2>&1; then
             READY=true
             break
         fi
@@ -179,17 +182,13 @@ for entry in "${ALL_TARGETS[@]}"; do
         exit 1
     fi
 
-    # bWAPP cold-start trap: an unconfigured install serves its setup wizard,
-    # which scanners would happily 'find vulnerabilities' in.
+    # Auto-initialize bWAPP database schema
     if [ "$NAME" = "bwapp" ]; then
-        BODY=$(curl -s --max-time 5 "$URL" 2>/dev/null \
-               curl -s --max-time 5 "$URL/login.php" 2>/dev/null || true)
-        case "$BODY" in
-            *install.php*)
-                error "bWAPP at $URL is not configured yet."
-                error "  Open $URL/install.php in a browser, complete setup, then re-run."
-                exit 1 ;;
-        esac
+        info "Initializing bWAPP database setup..."
+        curl -s -k -L --max-time 10 "$URL/bWAPP/install.php?install=yes" >/dev/null 2>&1 || true
+        curl -s -k -L --max-time 10 "${URL//127.0.0.1/localhost}/bWAPP/install.php?install=yes" >/dev/null 2>&1 || true
+        curl -s -k -L --max-time 10 "$URL/install.php?install=yes" >/dev/null 2>&1 || true
+        curl -s -k -L --max-time 5 "$URL/bWAPP/login.php" >/dev/null 2>&1 || true
     fi
     success "$NAME ($URL) ready"
 done
@@ -199,11 +198,14 @@ done
 # ============================================================================
 header "Nuclei Scanner (comprehensive: all severity, all template tags)"
 
-# Update templates once per day
-LAST_UPDATE_FILE="$TEMPLATE_DIR/.last_update"
+# Ensure persistent nuclei templates volume exists
+docker volume create nuclei_templates_cache >/dev/null 2>&1 || true
+
+# Update templates once per day in persistent volume
+LAST_UPDATE_FILE="$SCAN_DIR/.nuclei_update"
 NEEDS_UPDATE=true
 if [ -f "$LAST_UPDATE_FILE" ]; then
-    LAST_UPDATE=$(cat "$LAST_UPDATE_FILE" 2>/dev/null || echo "0")
+    LAST_UPDATE=$(cat "$LAST_UPDATE_FILE" 2>/dev/null | tr -d '\r\n ' || echo "0")
     TODAY=$(date +%s)
     DIFF=$((TODAY - LAST_UPDATE))
     if [ "$DIFF" -lt 86400 ]; then
@@ -213,9 +215,10 @@ if [ -f "$LAST_UPDATE_FILE" ]; then
 fi
 
 if $NEEDS_UPDATE; then
-    info "Updating nuclei templates..."
+    info "Updating nuclei templates in shared cache..."
     docker rm -f "scanner-nuclei-update" 2>/dev/null || true
-    docker run --rm --name "scanner-nuclei-update" --network=host \
+    docker run --rm --name "scanner-nuclei-update" \
+        -v nuclei_templates_cache:/root/nuclei-templates \
         projectdiscovery/nuclei:latest \
         -update-templates 2>&1 | tail -5 || warn "Template update failed (will use cached)"
     date +%s > "$LAST_UPDATE_FILE"
@@ -224,135 +227,104 @@ fi
 
 want_scanner nuclei || { info "Nuclei skipped (--scanners)"; }
 
-if want_scanner nuclei; then
-for target_name in "${ALL_TARGETS[@]}"; do
-    NAME="${target_name%%|*}"
-    URL="${target_name##*|}"
+# ============================================================================
+#  Scanner Worker Functions (Executed Concurrently in Parallel)
+# ============================================================================
 
-    # --network=host only helps for localhost targets; bridge networking
-    # reaches LAN IPs natively and is more reliable on Docker Desktop.
-    NET_FLAG="--network=host"
-    if ! is_local_target "$URL"; then NET_FLAG=""; fi
+run_nuclei() {
+    local NAME="$1"
+    local URL="$2"
+    local DOCKER_URL
+    DOCKER_URL=$(echo "$URL" | sed 's|localhost|host.docker.internal|g' | sed 's|127.0.0.1|host.docker.internal|g')
+    local OUTPUT="$SCAN_DIR/${NAME}_nuclei.json"
 
-    OUTPUT="$SCAN_DIR/${NAME}_nuclei.json"
-
-    info "Scanning $NAME ($URL)..."
+    info "Starting Nuclei on $NAME ($DOCKER_URL)..."
     docker rm -f "scanner-nuclei-$NAME" 2>/dev/null || true
 
-    # Comprehensive nuclei scan with DAST + vuln tags:
-    #  -u URL           = target URL
-    #  -c 25            = 25 concurrent template execution
-    #  -rl 150          = rate limit 150 requests/sec
-    #  -timeout 10      = 10s per request
-    #  -retries 1       = retry failed once
-    #  -dast            = enable DAST (active) templates
-    #  -tags            = focus on high-overlap vulnerability types
-    #  -jsonl           = JSON Lines output (one finding per line)
-    docker run --rm --name "scanner-nuclei-$NAME" $NET_FLAG \
+    docker run --rm --name "scanner-nuclei-$NAME" \
         --memory=1g --cpus=1 \
+        --add-host=host.docker.internal:host-gateway \
+        -v nuclei_templates_cache:/root/nuclei-templates \
+        -v "$SCAN_DIR":/out \
         projectdiscovery/nuclei:latest \
-        -u "$URL" \
+        -t /root/nuclei-templates \
+        -u "$DOCKER_URL" \
+        -severity critical,high,medium,low,info \
+        -timeout 30 \
+        -retries 2 \
         -c 25 \
-        -rl 150 \
-        -timeout 10 \
-        -retries 1 \
-        -dast \
-        -tags xss,sqli,lfi,rce,ssrf,xxe,redirect,crlf,command-injection \
+        -duc \
+        -ni \
         -jsonl \
-        -o "/dev/stdout" \
-        2>/dev/null > "$OUTPUT" || true
+        -o "/out/${NAME}_nuclei.json" \
+        -nc 2>/dev/null || true
 
-    COUNT=$(wc -l < "$OUTPUT" 2>/dev/null || echo 0)
+    local COUNT
+    COUNT=$(wc -l < "$OUTPUT" 2>/dev/null | tr -d '\r\n ' || echo 0)
+    [[ "$COUNT" =~ ^[0-9]+$ ]] || COUNT=0
     if [ "$COUNT" -gt 0 ]; then
-        CRIT=$(grep -c '"severity":"critical"' "$OUTPUT" 2>/dev/null || echo 0)
-        HIGH=$(grep -c '"severity":"high"' "$OUTPUT" 2>/dev/null || echo 0)
-        MED=$(grep -c '"severity":"medium"' "$OUTPUT" 2>/dev/null || echo 0)
-        LOW=$(grep -c '"severity":"low"' "$OUTPUT" 2>/dev/null || echo 0)
+        local CRIT HIGH MED LOW
+        CRIT=$(grep -c '"severity":"critical"' "$OUTPUT" 2>/dev/null | tr -d '\r\n ' || echo 0)
+        HIGH=$(grep -c '"severity":"high"' "$OUTPUT" 2>/dev/null | tr -d '\r\n ' || echo 0)
+        MED=$(grep -c '"severity":"medium"' "$OUTPUT" 2>/dev/null | tr -d '\r\n ' || echo 0)
+        LOW=$(grep -c '"severity":"low"' "$OUTPUT" 2>/dev/null | tr -d '\r\n ' || echo 0)
         success "Nuclei -> $NAME: $COUNT findings (critical:$CRIT high:$HIGH medium:$MED low:$LOW)"
     else
         warn "Nuclei -> $NAME: 0 findings"
     fi
-    TOTAL=$((TOTAL + 1))
-done
-fi
+}
 
-# ============================================================================
-#  OWASP ZAP — Full Spider + Active + Passive Scan
-# ============================================================================
-header "OWASP ZAP Scanner (full scan: spider + active + passive)"
+run_zap() {
+    local NAME="$1"
+    local URL="$2"
+    local DOCKER_URL
+    DOCKER_URL=$(echo "$URL" | sed 's|localhost|host.docker.internal|g' | sed 's|127.0.0.1|host.docker.internal|g')
+    local OUTPUT="$SCAN_DIR/${NAME}_zap.json"
 
-if want_scanner zap; then
-for target_name in "${ALL_TARGETS[@]}"; do
-    NAME="${target_name%%|*}"
-    URL="${target_name##*|}"
-
-    NET_FLAG="--network=host"
-    if ! is_local_target "$URL"; then NET_FLAG=""; fi
-
-    OUTPUT="$SCAN_DIR/${NAME}_zap.json"
-
-    info "Scanning $NAME ($URL) [baseline mode]..."
+    info "Starting ZAP on $NAME ($DOCKER_URL)..."
     docker rm -f "scanner-zap-$NAME" 2>/dev/null || true
 
-    # Baseline scan: passive scan + limited active scan (much lighter than full scan)
-    # Capped at 1GB RAM / 1 CPU to prevent system crashes
-    docker run --rm --name "scanner-zap-$NAME" $NET_FLAG \
+    docker run --rm --name "scanner-zap-$NAME" \
         --memory=1g --cpus=1 \
+        --add-host=host.docker.internal:host-gateway \
+        --user root \
         -v "$SCAN_DIR":/zap/wrk \
         ghcr.io/zaproxy/zaproxy:stable \
         zap-baseline.py \
-        -t "$URL" \
+        -t "$DOCKER_URL" \
         -J "${NAME}_zap.json" \
         -r "${NAME}_zap_report.html" \
         -d \
         -m 10 \
-        2>/dev/null || true
+        -I 2>/dev/null || true
 
     if [ -f "$OUTPUT" ]; then
-        ZAP_SIZE=$(wc -c < "$OUTPUT" 2>/dev/null || echo 0)
+        local ZAP_SIZE
+        ZAP_SIZE=$(wc -c < "$OUTPUT" 2>/dev/null | tr -d '\r\n ' || echo 0)
         success "ZAP -> $NAME: report generated ($ZAP_SIZE bytes)"
-        TOTAL=$((TOTAL + 1))
     else
-        # Check if ZAP wrote to a different path
-        ALT_OUTPUT="$SCAN_DIR/zap-report.json"
+        local ALT_OUTPUT="$SCAN_DIR/zap-report.json"
         if [ -f "$ALT_OUTPUT" ]; then
             mv "$ALT_OUTPUT" "$OUTPUT"
             success "ZAP -> $NAME: report found and renamed"
-            TOTAL=$((TOTAL + 1))
         else
             warn "ZAP -> $NAME: no JSON output"
-            FAILED=$((FAILED + 1))
         fi
     fi
-done
-fi  # want_scanner zap
+}
 
-# ============================================================================
-#  TRIVY — Container image CVEs + Secrets + Misconfig (LOCAL ONLY)
-# ============================================================================
-if [ "$HAS_TRIVY" = "1" ] && want_scanner trivy; then
-header "Trivy Scanner (container images: vuln + secrets + misconfig)"
+run_trivy() {
+    local NAME="$1"
+    local OUTPUT="$SCAN_DIR/${NAME}_trivy.json"
 
-# Trivy scans images by resolving them from the LOCAL docker daemon/registry.
-for NAME in "juiceshop" "bwapp" "nodegoat"; do
-    FOUND_IN_TARGETS=0
-    for entry in "${ALL_TARGETS[@]}"; do
-        [ "${entry%%|*}" = "$NAME" ] && FOUND_IN_TARGETS=1
-    done
-    [ "$FOUND_IN_TARGETS" = "1" ] || continue
-
-    OUTPUT="$SCAN_DIR/${NAME}_trivy.json"
-
-    # Check if container is running
     if ! docker inspect "$NAME" &>/dev/null; then
         warn "Trivy -> $NAME: container not running, skipping"
-        FAILED=$((FAILED + 1))
-        continue
+        return
     fi
 
-    # Get the image name from the running container
+    local IMAGE
     IMAGE=$(docker inspect --format='{{.Config.Image}}' "$NAME" 2>/dev/null || echo "$NAME")
-    info "Scanning container $NAME (image: $IMAGE)..."
+    info "Starting Trivy on $NAME (image: $IMAGE)..."
     docker rm -f "scanner-trivy-$NAME" 2>/dev/null || true
 
     docker run --rm --name "scanner-trivy-$NAME" \
@@ -366,116 +338,73 @@ for NAME in "juiceshop" "bwapp" "nodegoat"; do
         -o "/out/${NAME}_trivy.json" \
         "$IMAGE" 2>/dev/null || true
 
-    if [ -f "$OUTPUT" ] && [ "$(wc -c < "$OUTPUT" 2>/dev/null || echo 0)" -gt 10 ]; then
+    if [ -f "$OUTPUT" ] && [ "$(wc -c < "$OUTPUT" 2>/dev/null | tr -d '\r\n ' || echo 0)" -gt 10 ]; then
         success "Trivy -> $NAME: report generated"
-        TOTAL=$((TOTAL + 1))
     else
         warn "Trivy -> $NAME: empty or missing"
-        FAILED=$((FAILED + 1))
     fi
-done
-fi  # HAS_TRIVY && want_scanner trivy
+}
 
-# ============================================================================
-#  WAPITI — Web App Vulnerability Scanning (SQLi, XSS, SSRF, LFI, etc.)
-# ============================================================================
-if want_scanner wapiti; then
-header "Wapiti Scanner (SQLi, XSS, CRLF, SSRF, LFI, etc.)"
+run_wapiti() {
+    local NAME="$1"
+    local URL="$2"
+    local DOCKER_URL
+    DOCKER_URL=$(echo "$URL" | sed 's|localhost|host.docker.internal|g' | sed 's|127.0.0.1|host.docker.internal|g')
+    local OUTPUT="$SCAN_DIR/${NAME}_wapiti.json"
 
-# NOTE: Docker image vulnlab/wapiti:latest has entrypoint "wapiti"
-#       so we pass arguments directly (NO "wapiti" prefix in command)
-#       Also requires MSYS_NO_PATHCONV=1 on Git Bash to prevent /out/ path mangling
+    info "Starting Wapiti on $NAME ($DOCKER_URL)..."
+    docker rm -f "scanner-wapiti-$NAME" 2>/dev/null || true
 
-WAPITI_OK=false
-if docker image inspect "vulnlab/wapiti:latest" &>/dev/null; then
-    WAPITI_OK=true
-    info "Wapiti Docker image available"
-else
-    info "Pulling Wapiti Docker image..."
-    docker pull vulnlab/wapiti:latest 2>/dev/null && WAPITI_OK=true || true
-fi
+    docker run --rm --name "scanner-wapiti-$NAME" \
+        --memory=512m --cpus=0.5 \
+        --add-host=host.docker.internal:host-gateway \
+        --entrypoint wapiti \
+        -v "$SCAN_DIR":/out \
+        vulnlab/wapiti:latest \
+        -u "$DOCKER_URL" \
+        -f json \
+        -o "/out/${NAME}_wapiti.json" \
+        -d 3 \
+        --max-links-per-page 100 \
+        --flush-attacks \
+        --flush-session \
+        -t 15 \
+        2>/dev/null || true
 
-if $WAPITI_OK; then
-    for target_name in "${ALL_TARGETS[@]}"; do
-        NAME="${target_name%%|*}"
-        URL="${target_name##*|}"
-
-        NET_FLAG="--network=host"
-        if ! is_local_target "$URL"; then NET_FLAG=""; fi
-
-        OUTPUT="$SCAN_DIR/${NAME}_wapiti.json"
-
-        info "Scanning $NAME ($URL)..."
-        docker rm -f "scanner-wapiti-$NAME" 2>/dev/null || true
-
-        # Explicitly set entrypoint to wapiti (defensive against image changes)
-        docker run --rm --name "scanner-wapiti-$NAME" $NET_FLAG \
-            --memory=512m --cpus=0.5 \
-            --entrypoint wapiti \
-            -v "$SCAN_DIR":/out \
-            vulnlab/wapiti:latest \
-            -u "$URL" \
-            -f json \
-            -o "/out/${NAME}_wapiti.json" \
-            -d 3 \
-            --max-links-per-page 100 \
-            --flush-attacks \
-            --flush-session \
-            -t 15 \
-            2>/dev/null || true
-
-        if [ -f "$OUTPUT" ] && [ "$(wc -c < "$OUTPUT" 2>/dev/null || echo 0)" -gt 10 ]; then
-            WAPITI_VULNS=$($PYTHON -c "
+    if [ -f "$OUTPUT" ] && [ "$(wc -c < "$OUTPUT" 2>/dev/null | tr -d '\r\n ' || echo 0)" -gt 10 ]; then
+        local WAPITI_VULNS
+        WAPITI_VULNS=$($PYTHON -c "
 import json
 try:
-    d=json.load(open('$OUTPUT'))
-    total=sum(len(v) for v in d.get('vulnerabilities',{}).values())
-    print(total)
-except: print('?')
-" 2>/dev/null || echo "?")
-            success "Wapiti -> $NAME: $WAPITI_VULNS vulnerabilities"
-            TOTAL=$((TOTAL + 1))
-        else
-            warn "Wapiti -> $NAME: empty report"
-            FAILED=$((FAILED + 1))
-        fi
-    done
-else
-    warn "Wapiti not available — install: docker pull vulnlab/wapiti:latest"
-    FAILED=$((FAILED + ${#ALL_TARGETS[@]}))
-fi
-fi  # want_scanner wapiti
+    d = json.load(open('$OUTPUT'))
+    vulns = sum(len(v) for v in (d.get('vulnerabilities') or {}).values())
+    anoms = sum(len(v) for v in (d.get('anomalies') or {}).values())
+    print(vulns + anoms)
+except:
+    print(0)
+" 2>/dev/null | tr -d '\r\n ' || echo 0)
+        [[ "$WAPITI_VULNS" =~ ^[0-9]+$ ]] || WAPITI_VULNS=0
+        success "Wapiti -> $NAME: $WAPITI_VULNS vulnerabilities/anomalies"
+    else
+        warn "Wapiti -> $NAME: empty report"
+    fi
+}
 
-# ============================================================================
-#  NMAP — Port/Service Discovery + NSE Vuln Scripts
-# ============================================================================
-if want_scanner nmap; then
-header "Nmap Scanner (port discovery + vuln/exploit NSE scripts)"
-
-for target_name in "${ALL_TARGETS[@]}"; do
-    NAME="${target_name%%|*}"
-    URL="${target_name##*|}"
-
-    # Nmap never uses --network=host (broken on Docker Desktop Windows/macOS)
-    # Always use host.docker.internal for host access
-    NET_FLAG=""
-
-    # Extract host:port from URL for nmap, replace localhost with host.docker.internal
-    NMAP_TARGET=$(echo "$URL" | sed 's|https*://||' | sed 's|/$||' | sed 's|localhost|host.docker.internal|g')
-
+run_nmap() {
+    local NAME="$1"
+    local URL="$2"
+    local RAW_HP NMAP_HOST NMAP_PORT PORT_FLAG OUTPUT_XML
+    RAW_HP=$(echo "$URL" | sed 's|https*://||' | sed 's|/$||')
+    NMAP_HOST=$(echo "$RAW_HP" | cut -d: -f1 | sed 's|localhost|host.docker.internal|g' | sed 's|127.0.0.1|host.docker.internal|g')
+    NMAP_PORT=$(echo "$RAW_HP" | grep -o ':[0-9]*$' | tr -d ':' || true)
+    PORT_FLAG=""
+    if [ -n "$NMAP_PORT" ]; then PORT_FLAG="-p $NMAP_PORT"; fi
     OUTPUT_XML="$SCAN_DIR/${NAME}_nmap.xml"
 
-    info "Scanning $NAME ($NMAP_TARGET)..."
+    info "Starting Nmap on $NAME ($NMAP_HOST $PORT_FLAG)..."
     docker rm -f "scanner-nmap-$NAME" 2>/dev/null || true
 
-    # Nmap with vuln + exploit NSE scripts:
-    #  -sV              = service version detection
-    #  --script vuln    = run vulnerability detection scripts
-    #  --script exploit  = run exploit scripts (safe ones)
-    #  -oX              = XML output (for normalize.py parser)
-    #  -T4              = aggressive timing (faster)
-    #  --open           = only show open ports
-    docker run --rm --name "scanner-nmap-$NAME" $NET_FLAG \
+    docker run --rm --name "scanner-nmap-$NAME" \
         --memory=512m --cpus=0.5 \
         --add-host=host.docker.internal:host-gateway \
         -v "$SCAN_DIR":/out \
@@ -485,42 +414,113 @@ for target_name in "${ALL_TARGETS[@]}"; do
         -oX "/out/${NAME}_nmap.xml" \
         -T4 \
         --open \
-        "$NMAP_TARGET" \
+        $PORT_FLAG \
+        "$NMAP_HOST" \
         2>/dev/null || true
 
-    if [ -f "$OUTPUT_XML" ] && [ "$(wc -c < "$OUTPUT_XML" 2>/dev/null || echo 0)" -gt 10 ]; then
-        # Count open ports from XML directly (pipeline's normalize.py parses XML natively)
+    if [ -f "$OUTPUT_XML" ] && [ "$(wc -c < "$OUTPUT_XML" 2>/dev/null | tr -d '\r\n ' || echo 0)" -gt 10 ]; then
+        local NMAP_PORTS
         NMAP_PORTS=$($PYTHON -c "
-import sys
 from defusedxml import ElementTree as ET
 try:
     tree = ET.parse('$OUTPUT_XML')
     root = tree.getroot()
     count = 0
-    for host in root.findall('host'):
-        for p in host.findall('port'):
-            s = p.find('state')
-            if s is not None and s.get('state') == 'open':
-                count += 1
+    for p in root.findall('.//port'):
+        s = p.find('state')
+        if s is not None and s.get('state') == 'open':
+            count += 1
     print(count)
-except: print(0)
-" 2>/dev/null || echo 0)
+except:
+    print(0)
+" 2>/dev/null | tr -d '\r\n ' || echo 0)
+        [[ "$NMAP_PORTS" =~ ^[0-9]+$ ]] || NMAP_PORTS=0
         success "Nmap -> $NAME: $NMAP_PORTS open ports/services"
-        TOTAL=$((TOTAL + 1))
     else
         warn "Nmap -> $NAME: no output"
-        FAILED=$((FAILED + 1))
     fi
+}
+
+# ============================================================================
+#  Parallel Dispatcher — Run all enabled scanners concurrently
+# ============================================================================
+header "Running Security Scanners in Parallel"
+
+# Check Wapiti image availability
+WAPITI_OK=false
+if want_scanner wapiti; then
+    if docker image inspect "vulnlab/wapiti:latest" &>/dev/null; then
+        WAPITI_OK=true
+    else
+        info "Pulling Wapiti Docker image..."
+        docker pull vulnlab/wapiti:latest 2>/dev/null && WAPITI_OK=true || warn "Wapiti image pull failed"
+    fi
+fi
+
+PIDS=()
+
+# Launch Nuclei Scanners in parallel
+if want_scanner nuclei; then
+    for target_name in "${ALL_TARGETS[@]}"; do
+        run_nuclei "${target_name%%|*}" "${target_name##*|}" &
+        PIDS+=($!)
+    done
+fi
+
+# Launch ZAP Scanners in parallel
+if want_scanner zap; then
+    for target_name in "${ALL_TARGETS[@]}"; do
+        run_zap "${target_name%%|*}" "${target_name##*|}" &
+        PIDS+=($!)
+    done
+fi
+
+# Launch Trivy Scanners in parallel
+if [ "$HAS_TRIVY" = "1" ] && want_scanner trivy; then
+    for NAME in "juiceshop" "bwapp" "nodegoat"; do
+        FOUND_IN_TARGETS=0
+        for entry in "${ALL_TARGETS[@]}"; do
+            [ "${entry%%|*}" = "$NAME" ] && FOUND_IN_TARGETS=1
+        done
+        [ "$FOUND_IN_TARGETS" = "1" ] || continue
+        run_trivy "$NAME" &
+        PIDS+=($!)
+    done
+fi
+
+# Launch Wapiti Scanners in parallel
+if want_scanner wapiti && [ "$WAPITI_OK" = true ]; then
+    for target_name in "${ALL_TARGETS[@]}"; do
+        run_wapiti "${target_name%%|*}" "${target_name##*|}" &
+        PIDS+=($!)
+    done
+fi
+
+# Launch Nmap Scanners in parallel
+if want_scanner nmap; then
+    for target_name in "${ALL_TARGETS[@]}"; do
+        run_nmap "${target_name%%|*}" "${target_name##*|}" &
+        PIDS+=($!)
+    done
+fi
+
+info "Dispatched ${#PIDS[@]} parallel scan jobs across targets and scanners."
+info "Running concurrently in background..."
+
+# Wait for all background scanners to complete
+for pid in "${PIDS[@]}"; do
+    wait "$pid" 2>/dev/null || true
 done
-fi  # want_scanner nmap
+success "All parallel scan jobs completed!"
 
 # ============================================================================
 #  Summary
 # ============================================================================
 echo ""
-success "Scanning complete: $TOTAL reports generated ($FAILED failed)"
+TOTAL_FILES=$(find "$SCAN_DIR" -maxdepth 1 -type f \( -name "*.json" -o -name "*.xml" \) 2>/dev/null | wc -l | tr -d '\r\n ' || echo 0)
+success "Scanning complete: $TOTAL_FILES reports generated"
 info "Reports in: $SCAN_DIR/"
-ls -la "$SCAN_DIR"/*.json 2>/dev/null || warn "No JSON reports found"
+ls -la "$SCAN_DIR"/*.json "$SCAN_DIR"/*.xml 2>/dev/null || warn "No scan reports found"
 
 # Per-scanner summary
 echo ""
@@ -529,40 +529,52 @@ for scanner in nuclei zap trivy wapiti nmap; do
     COUNT=0
     for f in "$SCAN_DIR"/*_${scanner}.*; do
         [ -f "$f" ] || continue
+        C=0
         if [ "$scanner" = "nuclei" ]; then
-            C=$(wc -l < "$f" 2>/dev/null || echo 0)
+            C=$(wc -l < "$f" 2>/dev/null | tr -d '\r\n ' || echo 0)
         elif [ "$scanner" = "nmap" ]; then
             C=$($PYTHON -c "
-import sys
 from defusedxml import ElementTree as ET
 try:
     tree = ET.parse('$f')
     root = tree.getroot()
     count = 0
-    for host in root.findall('host'):
-        for p in host.findall('port'):
-            s = p.find('state')
-            if s is not None and s.get('state') == 'open':
-                count += 1
+    for p in root.findall('.//port'):
+        s = p.find('state')
+        if s is not None and s.get('state') == 'open':
+            count += 1
     print(count)
-except: print(0)
-" 2>/dev/null || echo 0)
+except:
+    print(0)
+" 2>/dev/null | tr -d '\r\n ' || echo 0)
+        elif [ "$scanner" = "wapiti" ]; then
+            C=$($PYTHON -c "
+import json
+try:
+    d = json.load(open('$f'))
+    vulns = sum(len(v) for v in (d.get('vulnerabilities') or {}).values())
+    anoms = sum(len(v) for v in (d.get('anomalies') or {}).values())
+    print(vulns + anoms)
+except:
+    print(0)
+" 2>/dev/null | tr -d '\r\n ' || echo 0)
         else
             C=$($PYTHON -c "
 import json
 try:
-    d=json.load(open('$f'))
+    d = json.load(open('$f'))
     if 'Results' in d:
         print(sum(len(v or []) for r in d.get('Results',[]) for v in [r.get('Vulnerabilities',[])]))
     elif 'site' in d:
         print(sum(len(s.get('alerts',[])) for s in d.get('site',[])))
-    elif 'vulnerabilities' in d:
-        print(sum(len(v) for v in d.get('vulnerabilities',{}).values()))
     else:
         print(0)
-except: print(0)
-" 2>/dev/null || echo 0)
+except:
+    print(0)
+" 2>/dev/null | tr -d '\r\n ' || echo 0)
         fi
+        C=$(echo "$C" | tr -d '\r\n ')
+        [[ "$C" =~ ^[0-9]+$ ]] || C=0
         COUNT=$((COUNT + C))
     done
     success "  $scanner: $COUNT findings"

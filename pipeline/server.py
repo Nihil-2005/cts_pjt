@@ -203,6 +203,7 @@ class ProductCreate(BaseModel):
     @field_validator("product_id")
     @classmethod
     def validate_product_id(cls, v):
+        v = v.strip().lower().replace(" ", "_")
         if not re.match(r"^[a-zA-Z0-9_-]{1,64}$", v):
             raise ValueError(
                 "product_id must be 1-64 alphanumeric chars, hyphens, or underscores"
@@ -212,9 +213,10 @@ class ProductCreate(BaseModel):
     @field_validator("url")
     @classmethod
     def validate_url(cls, v):
+        v = v.strip()
+        if not v.startswith("http://") and not v.startswith("https://"):
+            v = "http://" + v
         parsed = urlparse(v)
-        if parsed.scheme not in ("http", "https"):
-            raise ValueError("URL must use http or https")
         if not parsed.netloc:
             raise ValueError("URL must have a valid host")
         return v
@@ -276,12 +278,8 @@ async def list_products(user: str = Depends(get_current_user)):
     products = cfg.products
     manager = get_manager()
 
-    # Check app status for each product
-    app_statuses = {}
-    for pid, pcfg in products.items():
-        url = pcfg.get("url", "")
-        if url:
-            app_statuses[pid] = manager.check_app_status(url)
+    # Check app status for all products concurrently
+    app_statuses = manager.check_all_apps(products)
 
     return {
         "products": products,
@@ -324,13 +322,25 @@ async def create_product(req: ProductCreate, user: str = Depends(get_current_use
 
 @app.delete("/api/products/{product_id}")
 async def delete_product(product_id: str, user: str = Depends(get_current_user)):
-    """Remove a product from config."""
+    """Remove a product from config and clean from database."""
     cfg = _load_config()
-    if product_id not in cfg.products:
-        raise HTTPException(status_code=404, detail="Product not found")
+    if product_id in cfg.products or (cfg.data.get("products") and product_id in cfg.data["products"]):
+        if product_id in cfg.data.get("products", {}):
+            del cfg.data["products"][product_id]
+        _save_config(cfg)
 
-    del cfg.data["products"][product_id]
-    _save_config(cfg)
+    # Clean from lifecycle.db if present
+    try:
+        import sqlite3
+        db_path = Path("outputs/lifecycle.db")
+        if db_path.exists():
+            with sqlite3.connect(str(db_path)) as conn:
+                conn.execute("DELETE FROM sightings WHERE finding_id IN (SELECT finding_id FROM tracked_findings WHERE product=?)", (product_id,))
+                conn.execute("DELETE FROM sla_alerts WHERE finding_id IN (SELECT finding_id FROM tracked_findings WHERE product=?)", (product_id,))
+                conn.execute("DELETE FROM tracked_findings WHERE product=?", (product_id,))
+                conn.commit()
+    except Exception:
+        pass
 
     return {"status": "deleted", "product_id": product_id}
 
@@ -439,10 +449,67 @@ async def product_scan_status(product_id: str, user: str = Depends(get_current_u
 _pipeline_lock = threading.Lock()
 
 
+_pipeline_state: Dict[str, Any] = {
+    "running": False,
+    "status": "idle",
+    "current_stage": 0,
+    "total_stages": 9,
+    "stage_name": "",
+    "stage_detail": "",
+    "started_at": None,
+    "finished_at": None,
+    "duration": 0.0,
+    "error": None,
+    "stages": [
+        {"id": 1, "name": "Ingest & Normalize", "status": "pending"},
+        {"id": 2, "name": "Deduplication", "status": "pending"},
+        {"id": 3, "name": "Filtering & Quarantine", "status": "pending"},
+        {"id": 4, "name": "Threat Intelligence", "status": "pending"},
+        {"id": 5, "name": "Attack Path Mapping", "status": "pending"},
+        {"id": 6, "name": "Risk Scoring", "status": "pending"},
+        {"id": 7, "name": "AI Enrichment", "status": "pending"},
+        {"id": 8, "name": "Remediation Engineering", "status": "pending"},
+        {"id": 9, "name": "Ranking & Output", "status": "pending"},
+    ]
+}
+
+
+def _on_pipeline_stage(stage_num: int, name: str, detail: str = ""):
+    _pipeline_state["current_stage"] = stage_num
+    _pipeline_state["stage_name"] = name
+    _pipeline_state["stage_detail"] = detail
+    for s in _pipeline_state["stages"]:
+        if s["id"] < stage_num:
+            s["status"] = "completed"
+        elif s["id"] == stage_num:
+            s["status"] = "running"
+            s["detail"] = detail
+        else:
+            s["status"] = "pending"
+    ws_manager.broadcast({"type": "pipeline_update", "data": _pipeline_state})
+
+
+def _reset_pipeline_state():
+    _pipeline_state["running"] = True
+    _pipeline_state["status"] = "running"
+    _pipeline_state["current_stage"] = 0
+    _pipeline_state["stage_name"] = "Starting..."
+    _pipeline_state["stage_detail"] = ""
+    _pipeline_state["started_at"] = time.time()
+    _pipeline_state["finished_at"] = None
+    _pipeline_state["duration"] = 0.0
+    _pipeline_state["error"] = None
+    for s in _pipeline_state["stages"]:
+        s["status"] = "pending"
+        s.pop("detail", None)
+    ws_manager.broadcast({"type": "pipeline_update", "data": _pipeline_state})
+
+
 def _run_pipeline_background():
     """Start pipeline in a background thread (non-blocking)."""
     if not _pipeline_lock.acquire(blocking=False):
         return  # Already running
+    _reset_pipeline_state()
     def _run():
         try:
             from . import run as pipeline_run
@@ -453,9 +520,24 @@ def _run_pipeline_background():
                 config=cfg,
                 out_dir="outputs",
                 skip_ai=True,
+                stage_callback=_on_pipeline_stage,
             )
+            _pipeline_state["running"] = False
+            _pipeline_state["status"] = "completed"
+            _pipeline_state["finished_at"] = time.time()
+            _pipeline_state["duration"] = round(_pipeline_state["finished_at"] - (_pipeline_state["started_at"] or _pipeline_state["finished_at"]), 1)
+            for s in _pipeline_state["stages"]:
+                s["status"] = "completed"
+            ws_manager.broadcast({"type": "pipeline_update", "data": _pipeline_state})
+            ws_manager.broadcast({"type": "pipeline_complete", "status": "completed", "duration": _pipeline_state["duration"]})
         except Exception as e:
             print(f"[PIPELINE ERROR] {e}")
+            _pipeline_state["running"] = False
+            _pipeline_state["status"] = "failed"
+            _pipeline_state["error"] = str(e)
+            _pipeline_state["finished_at"] = time.time()
+            ws_manager.broadcast({"type": "pipeline_update", "data": _pipeline_state})
+            ws_manager.broadcast({"type": "pipeline_complete", "status": "failed", "error": str(e)})
         finally:
             _pipeline_lock.release()
     threading.Thread(target=_run, daemon=True).start()
@@ -467,6 +549,7 @@ async def run_pipeline(req: PipelineRequest, user: str = Depends(get_current_use
     if not _pipeline_lock.acquire(blocking=False):
         raise HTTPException(status_code=409, detail="Pipeline is already running")
 
+    _reset_pipeline_state()
     cfg = _load_config()
     manager = get_manager()
 
@@ -479,11 +562,25 @@ async def run_pipeline(req: PipelineRequest, user: str = Depends(get_current_use
                 config=cfg,
                 out_dir="outputs",
                 products=req.products,
-
                 skip_ai=req.skip_ai,
+                stage_callback=_on_pipeline_stage,
             )
+            _pipeline_state["running"] = False
+            _pipeline_state["status"] = "completed"
+            _pipeline_state["finished_at"] = time.time()
+            _pipeline_state["duration"] = round(_pipeline_state["finished_at"] - (_pipeline_state["started_at"] or _pipeline_state["finished_at"]), 1)
+            for s in _pipeline_state["stages"]:
+                s["status"] = "completed"
+            ws_manager.broadcast({"type": "pipeline_update", "data": _pipeline_state})
+            ws_manager.broadcast({"type": "pipeline_complete", "status": "completed", "duration": _pipeline_state["duration"]})
         except Exception as e:
             print(f"[PIPELINE ERROR] {e}")
+            _pipeline_state["running"] = False
+            _pipeline_state["status"] = "failed"
+            _pipeline_state["error"] = str(e)
+            _pipeline_state["finished_at"] = time.time()
+            ws_manager.broadcast({"type": "pipeline_update", "data": _pipeline_state})
+            ws_manager.broadcast({"type": "pipeline_complete", "status": "failed", "error": str(e)})
         finally:
             _pipeline_lock.release()
 
@@ -495,8 +592,9 @@ async def run_pipeline(req: PipelineRequest, user: str = Depends(get_current_use
 
 @app.get("/api/pipeline/status")
 async def pipeline_status(user: str = Depends(get_current_user)):
-    """Check if pipeline is running."""
-    return {"running": _pipeline_lock.locked()}
+    """Check pipeline running state and current stage progress."""
+    _pipeline_state["running"] = _pipeline_lock.locked()
+    return _pipeline_state
 
 
 # ─── GitHub ticket routes ────────────────────────────────────────────────────
@@ -504,11 +602,12 @@ async def pipeline_status(user: str = Depends(get_current_user)):
 
 @app.post("/api/tickets/create")
 async def create_tickets(
-    threshold: int = 60,
+    threshold: float = 40.0,
+    min_priority: Optional[str] = None,
     dry_run: bool = False,
     user: str = Depends(get_current_user),
 ):
-    """Auto-create GitHub Issues for findings above threshold."""
+    """Auto-create GitHub Issues for findings above threshold or matching priority."""
     findings_path = "outputs/ranked_findings.json"
     if not os.path.exists(findings_path):
         raise HTTPException(
@@ -554,12 +653,63 @@ async def create_tickets(
             labels=labels,
             dry_run=dry_run,
             lifecycle=lifecycle_mgr,
+            min_priority=min_priority,
         )
     finally:
         if lifecycle_mgr is not None:
             lifecycle_mgr.close()
 
     return {"results": result, "dry_run": dry_run}
+
+
+@app.post("/api/github/sync")
+async def github_sync(user: str = Depends(get_current_user)):
+    """Pull GitHub issue status changes (open/closed) into the lifecycle tracker."""
+    token = os.environ.get("GITHUB_TOKEN", "")
+    if not token:
+        raise HTTPException(status_code=400, detail="GITHUB_TOKEN not configured")
+
+    if not os.path.exists("outputs/lifecycle.db"):
+        raise HTTPException(status_code=404, detail="Lifecycle database not found. Run pipeline first.")
+
+    from . import github_tickets
+    from .lifecycle import LifecycleManager
+
+    cfg = _load_config()
+    products_config = cfg.data.get("products", {})
+
+    default_repo = os.environ.get("GITHUB_REPOSITORY") or os.environ.get("GITHUB_REPO", "")
+    repos_to_sync = set()
+    if default_repo:
+        repos_to_sync.add(default_repo)
+    for p in products_config.values():
+        r = p.get("github_repo")
+        if r:
+            repos_to_sync.add(r)
+
+    if not repos_to_sync:
+        raise HTTPException(status_code=400, detail="No GitHub repository configured")
+
+    lc = LifecycleManager("outputs/lifecycle.db")
+    total_synced = 0
+    total_checked = 0
+    errors = []
+    try:
+        for repo_name in repos_to_sync:
+            try:
+                gh = github_tickets.GitHubTickets(repo_name, token)
+                res = gh.sync_from_github(lc)
+                total_synced += res.get("synced", 0)
+                total_checked += res.get("total_checked", 0)
+            except Exception as e:
+                errors.append(f"{repo_name}: {e}")
+
+        # Broadcast live lifecycle data update to dashboard
+        ws_manager.broadcast({"type": "lifecycle_update", "data": lc.get_dashboard_data()})
+    finally:
+        lc.close()
+
+    return {"synced": total_synced, "total_checked": total_checked, "errors": errors}
 
 
 @app.post("/api/jira/sync")
@@ -572,9 +722,13 @@ async def jira_sync(user: str = Depends(get_current_user)):
     if not client.configured:
         raise HTTPException(status_code=400, detail="JIRA not configured")
 
+    if not os.path.exists("outputs/lifecycle.db"):
+        raise HTTPException(status_code=404, detail="Lifecycle database not found. Run pipeline first.")
+
     lc = LifecycleManager("outputs/lifecycle.db")
     try:
         result = client.sync_from_jira(lc)
+        ws_manager.broadcast({"type": "lifecycle_update", "data": lc.get_dashboard_data()})
     finally:
         lc.close()
     return result
@@ -597,7 +751,7 @@ async def github_sync(user: str = Depends(get_current_user)):
     from .lifecycle import LifecycleManager
 
     token = os.environ.get("GITHUB_TOKEN", "")
-    repo = os.environ.get("GITHUB_REPO", "")
+    repo = os.environ.get("GITHUB_REPO") or os.environ.get("GITHUB_REPOSITORY", "")
     if not token or not repo:
         raise HTTPException(status_code=400, detail="GITHUB_TOKEN or GITHUB_REPO not configured")
     gh_client = github_tickets.GitHubTickets(repo, token)
@@ -842,11 +996,22 @@ async def jira_create(threshold: int = 60, user: str = Depends(get_current_user)
             cve=r.get("cve"),
             cwe=r.get("cwe"),
             endpoint=r.get("endpoint"),
+            parameter=r.get("parameter"),
+            description=r.get("description", ""),
+            evidence=r.get("evidence"),
+            package=r.get("package"),
+            installed_version=r.get("installed_version"),
+            fixed_version=r.get("fixed_version"),
             score=r.get("score"),
             priority=r.get("priority"),
+            sla_hours=r.get("sla_hours", 72),
+            owner=r.get("owner", "unassigned"),
         )
         for r in data
     ]
+    for idx, r in enumerate(data):
+        findings[idx].score_breakdown = r.get("score_breakdown", {})
+        findings[idx].remediation_suggestions = r.get("remediation_suggestions", [])
 
     result = client.create_issues_bulk(findings)
     return result
@@ -895,11 +1060,22 @@ async def defectdojo_import(product_name: str, user: str = Depends(get_current_u
             cve=r.get("cve"),
             cwe=r.get("cwe"),
             endpoint=r.get("endpoint"),
-            score=r.get("score"),
+            parameter=r.get("parameter"),
             description=r.get("description", ""),
+            evidence=r.get("evidence"),
+            package=r.get("package"),
+            installed_version=r.get("installed_version"),
+            fixed_version=r.get("fixed_version"),
+            score=r.get("score"),
+            priority=r.get("priority"),
+            sla_hours=r.get("sla_hours", 72),
+            owner=r.get("owner", "unassigned"),
         )
         for r in data
     ]
+    for idx, r in enumerate(data):
+        findings[idx].score_breakdown = r.get("score_breakdown", {})
+        findings[idx].remediation_suggestions = r.get("remediation_suggestions", [])
 
     return import_to_defectdojo(findings, product_name)
 
@@ -908,39 +1084,28 @@ async def defectdojo_import(product_name: str, user: str = Depends(get_current_u
 
 
 @app.post("/api/import/findings")
-async def import_external_findings(
-    file: str = "",
-    source_name: str = "external_import",
-    user: str = Depends(get_current_user),
+async def import_findings(
+    req: ImportFindingsRequest, user: str = Depends(get_current_user)
 ):
-    """Import findings from an external file (JSON, XML, CSV, SARIF)."""
+    """Import findings from a structured JSON payload."""
     from . import external_import
 
-    if not file or not os.path.exists(file):
-        raise HTTPException(status_code=400, detail="Provide a valid file path")
-
-    try:
-        findings = external_import.import_file(file, source_name)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Import failed: {e}")
-
+    findings = external_import.import_data(req.findings, req.source_name)
     if not findings:
-        return {"imported": 0, "message": "No valid findings in file"}
+        return {"imported": 0, "message": "No valid findings could be parsed"}
 
-    # Save imported findings
     import_dir = os.path.join("scan_reports", "imports")
     os.makedirs(import_dir, exist_ok=True)
-    import_name = os.path.basename(file)
-    out_path = os.path.join(import_dir, f"{source_name}_{import_name}.json")
+    out_path = os.path.join(import_dir, f"{req.source_name}_{len(findings)}.json")
 
     with open(out_path, "w", encoding="utf-8") as fh:
-        json.dump([f.to_dict() for f in findings], fh, indent=2)
+        _json.dump([f.to_dict() for f in findings], fh, indent=2)
 
     return {
         "imported": len(findings),
-        "source": source_name,
-        "file": out_path,
-        "by_severity": {
+        "source": req.source_name,
+        "saved_to": out_path,
+        "severity_breakdown": {
             s: sum(1 for f in findings if f.severity == s)
             for s in ["critical", "high", "medium", "low", "info"]
         },
@@ -949,7 +1114,7 @@ async def import_external_findings(
 
 @app.post("/api/import/upload")
 async def upload_and_import(
-    file: bytes = None,
+    request: Request,
     source_name: str = "external_import",
     user: str = Depends(get_current_user),
 ):
@@ -957,11 +1122,12 @@ async def upload_and_import(
     from . import external_import
     import tempfile
 
-    if not file:
+    file_bytes = await request.body()
+    if not file_bytes:
         raise HTTPException(status_code=400, detail="No file uploaded")
 
     # Detect format from content
-    content = file.decode("utf-8", errors="replace")
+    content = file_bytes.decode("utf-8", errors="replace")
     if content.strip().startswith("{") or content.strip().startswith("["):
         ext = ".json"
     elif content.strip().startswith("<?xml") or content.strip().startswith("<"):

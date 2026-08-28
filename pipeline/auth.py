@@ -138,6 +138,25 @@ def _get_default_pass_hash() -> str:
 
 
 def authenticate(username: str, password: str) -> bool:
-    if username == _DEFAULT_USER and check_password(password, _get_default_pass_hash()):
+    expected_user = os.environ.get("DASHBOARD_USER", "admin")
+    expected_pass = ""
+    _env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
+    if os.path.exists(_env_path):
+        with open(_env_path, "r", encoding="utf-8") as ef:
+            for line in ef:
+                line = line.strip()
+                if line.startswith("DASHBOARD_PASS="):
+                    expected_pass = line.split("=", 1)[1].strip()
+                elif line.startswith("DASHBOARD_USER="):
+                    expected_user = line.split("=", 1)[1].strip()
+
+    if not expected_pass:
+        expected_pass = os.environ.get("DASHBOARD_PASS", "")
+
+    if username != expected_user:
+        return False
+    if expected_pass and password == expected_pass:
+        return True
+    if _DEFAULT_PASS_HASH and check_password(password, _DEFAULT_PASS_HASH):
         return True
     return False

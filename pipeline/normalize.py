@@ -572,6 +572,8 @@ def parse_reports_dir(
     for report_file in sorted(reports_path.rglob("*")):
         if not report_file.is_file():
             continue
+        if "archive" in report_file.parts or any(p.startswith(".") for p in report_file.parts):
+            continue
         if report_file.suffix.lower() not in (".json", ".xml"):
             continue
         fname = report_file.name

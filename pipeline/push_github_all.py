@@ -31,7 +31,7 @@ def main():
     args = parser.parse_args()
 
     token = os.environ.get("GITHUB_TOKEN", "")
-    repo = os.environ.get("GITHUB_REPO", "")
+    repo = os.environ.get("GITHUB_REPO") or os.environ.get("GITHUB_REPOSITORY", "")
 
     if not token:
         print("ERROR: GITHUB_TOKEN not set in .env")

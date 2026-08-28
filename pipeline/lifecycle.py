@@ -50,7 +50,7 @@ class TrackedFinding:
         return asdict(self)
 
 
-DEFAULT_SLA_BANDS = [(90, 24), (70, 72), (40, 168), (0, 336)]
+DEFAULT_SLA_BANDS = [(90, 10), (70, 15), (40, 20), (20, 24), (0, 30)]
 
 
 def calculate_sla_deadline(score: float, sla_hours: int, run_date: str = "") -> str:
@@ -324,7 +324,7 @@ class LifecycleManager:
         fixed = self.get_fixed_findings(product_findings, product=product)
         engagement = {
             "run_date": run_date, "product": product,
-            "total_findings": len(current_findings), "new_findings": len(new),
+            "total_findings": len(product_findings), "new_findings": len(new),
             "fixed_findings": len(fixed), "unchanged_findings": len(existing),
             "avg_score": summary_stats.get("avg_score", 0) if summary_stats else 0,
             "breached_sla": len(self.get_breached_findings(product=product)),
@@ -379,14 +379,14 @@ class LifecycleManager:
         return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
     def _default_sla(self, score: float, severity: str = "") -> int:
-        SEVERITY_SLA = {"critical": 24, "high": 72, "medium": 168, "low": 336, "info": 720}
+        SEVERITY_SLA = {"critical": 10, "high": 15, "medium": 20, "low": 24, "info": 30}
         sev = (severity or "").lower().strip()
         if sev in SEVERITY_SLA:
             return SEVERITY_SLA[sev]
         for threshold, hours in DEFAULT_SLA_BANDS:
             if score >= threshold:
                 return hours
-        return 336
+        return 24
 
     def _row_to_tracked(self, row) -> TrackedFinding:
         transitions = json.loads(row["transitions"]) if row["transitions"] else []

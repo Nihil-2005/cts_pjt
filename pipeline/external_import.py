@@ -25,13 +25,18 @@ def import_file(path: str, source_name: str = "") -> List[Finding]:
     with open(path, "r", encoding="utf-8", errors="replace") as f:
         content = f.read()
 
-    if ext == ".json":
+    if ext in (".json", ".sarif"):
         return _import_json(content, source_name)
-    elif ext in (".xml", ".sarif"):
+    elif ext == ".xml":
         return _import_xml(content, source_name)
     elif ext == ".csv":
         return _import_csv(content, source_name)
     else:
+        trimmed = content.strip()
+        if trimmed.startswith("{") or trimmed.startswith("["):
+            return _import_json(content, source_name)
+        elif trimmed.startswith("<"):
+            return _import_xml(content, source_name)
         raise ValueError(f"Unsupported format: {ext}")
 
 

@@ -34,7 +34,7 @@ def _push_github_worker(findings: list, threshold: float, lifecycle_path: str) -
     log_path = os.path.join(os.path.dirname(lifecycle_path) or "outputs", "github_push.log")
 
     token = os.environ.get("GITHUB_TOKEN", "")
-    repo = os.environ.get("GITHUB_REPO", "")
+    repo = os.environ.get("GITHUB_REPO") or os.environ.get("GITHUB_REPOSITORY", "")
     if not token or not repo:
         with open(log_path, "w") as lf:
             lf.write("[SKIP] GITHUB_TOKEN or GITHUB_REPO not set\n")
@@ -104,7 +104,7 @@ def _launch_github_push(findings: list, lifecycle_manager_path: str = "", blocki
     If blocking=True, waits for completion (used by CLI). Returns the thread.
     """
     token = os.environ.get("GITHUB_TOKEN", "")
-    repo = os.environ.get("GITHUB_REPO", "")
+    repo = os.environ.get("GITHUB_REPO") or os.environ.get("GITHUB_REPOSITORY", "")
     if not token or not repo:
         print("  [GITHUB] Skipped — GITHUB_TOKEN or GITHUB_REPO not set")
         return None
@@ -128,12 +128,21 @@ def run_pipeline(
     fetcher: Optional[enrich.Fetcher] = None,
     ollama_model: Optional[str] = None, groq_api_key: Optional[str] = None,
     groq_model: Optional[str] = None,
+    stage_callback: Optional[Any] = None,
 ) -> Dict[str, Any]:
+    def _notify_stage(stage_num: int, name: str, detail: str = ""):
+        if stage_callback:
+            try:
+                stage_callback(stage_num, name, detail)
+            except Exception:
+                pass
+
     os.makedirs(out_dir, exist_ok=True)
     run_date = dt.datetime.now().isoformat(timespec="seconds")
     products = products or config.product_names()
 
     # Stage 1: Ingest & Normalize
+    _notify_stage(1, "Ingest & Normalize", "Parsing scanner reports")
     print("=" * 60)
     print("STAGE 1/9: INGEST & NORMALIZE")
     print("=" * 60)
@@ -147,6 +156,7 @@ def run_pipeline(
     print(f"  Scanners: {', '.join(scanners_found)}")
 
     # Stage 2: Deduplication
+    _notify_stage(2, "Deduplication", f"Deduplicating {len(findings)} findings")
     print("\n" + "=" * 60)
     print("STAGE 2/9: DEDUPLICATION")
     print("=" * 60)
@@ -164,6 +174,7 @@ def run_pipeline(
     print(f"  Raw: {metrics['raw']} -> Unique: {metrics['unique']} (dedup: {metrics['dedup_pct']}%) | Removed: {len(removed_findings)}")
 
     # Stage 3: Filtering
+    _notify_stage(3, "Filtering & Quarantine", "Applying quarantine and suppression rules")
     print("\n" + "=" * 60)
     print("STAGE 3/9: FILTERING")
     print("=" * 60)
@@ -174,6 +185,7 @@ def run_pipeline(
     print(f"  Active: {filter_metrics['active']} | Quarantined: {filter_metrics['quarantined']}")
 
     # Stage 4: Threat Enrichment
+    _notify_stage(4, "Threat Intelligence", "Enriching with CISA KEV, EPSS, Exploit-DB, and NVD")
     print("\n" + "=" * 60)
     print("STAGE 4/9: THREAT ENRICHMENT")
     print("=" * 60)
@@ -182,6 +194,7 @@ def run_pipeline(
     print(f"  [OK] Enriched: {enricher.counts_dict()}")
 
     # Stage 5: Attack Path Mapping
+    _notify_stage(5, "Attack Path Mapping", "Building attack chains and transition graphs")
     print("\n" + "=" * 60)
     print("STAGE 5/9: ATTACK PATH MAPPING")
     print("=" * 60)
@@ -196,6 +209,7 @@ def run_pipeline(
     print(f"  [PATHS] {total_paths} attack paths across {len(all_paths)} products")
 
     # Stage 6: Risk Scoring
+    _notify_stage(6, "Risk Scoring", "Calculating 8-factor composite risk scores")
     print("\n" + "=" * 60)
     print("STAGE 6/9: RISK SCORING")
     print("=" * 60)
@@ -209,6 +223,7 @@ def run_pipeline(
         print(f"  [SCORE] Scored {len(active)} findings")
 
     # Stage 7: AI Enrichment
+    _notify_stage(7, "AI Enrichment", "Generating executive brief and remediation notes")
     print("\n" + "=" * 60)
     print("STAGE 7/9: AI ENRICHMENT")
     print("=" * 60)
@@ -229,6 +244,7 @@ def run_pipeline(
         ai_result["executive_brief"] = ai_mod._executive_brief(active, ai_summary_stats)
 
     # Stage 8: Remediation
+    _notify_stage(8, "Remediation Engineering", "Generating contextual remediation guidance")
     print("\n" + "=" * 60)
     print("STAGE 8/9: REMEDIATION")
     print("=" * 60)
@@ -238,6 +254,7 @@ def run_pipeline(
     print(f"  [REMEDIATE] Generated remediation for {len(active)} findings")
 
     # Stage 9: Ranking & Output
+    _notify_stage(9, "Ranking & Output", "Generating reports, history DB, and dashboard")
     print("\n" + "=" * 60)
     print("STAGE 9/9: RANKING & OUTPUT")
     print("=" * 60)
@@ -318,7 +335,7 @@ def run_pipeline(
     try:
         from . import github_tickets as _gh
         gh_token = os.environ.get("GITHUB_TOKEN", "")
-        gh_repo = os.environ.get("GITHUB_REPO", "")
+        gh_repo = os.environ.get("GITHUB_REPO") or os.environ.get("GITHUB_REPOSITORY", "")
         if gh_token and gh_repo:
             gh_client = _gh.GitHubTickets(gh_repo, gh_token)
             sync_result = gh_client.sync_from_github(lc)

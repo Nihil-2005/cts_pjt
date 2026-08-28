@@ -18,16 +18,16 @@ OUTPUT_DIR="$SCRIPT_DIR/outputs"
 CONFIG="$SCRIPT_DIR/config.json"
 
 VENV_PYTHON=""
-if [ -f "$SCRIPT_DIR/venv/Scripts/python.exe" ]; then
-    VENV_PYTHON="$SCRIPT_DIR/venv/Scripts/python.exe"
-elif [ -f "$SCRIPT_DIR/venv/Scripts/python" ]; then
-    VENV_PYTHON="$SCRIPT_DIR/venv/Scripts/python"
-elif [ -f "$SCRIPT_DIR/venv/bin/python" ]; then
+if [ -f "$SCRIPT_DIR/venv/bin/python" ] && "$SCRIPT_DIR/venv/bin/python" -c "import sys" >/dev/null 2>&1; then
     VENV_PYTHON="$SCRIPT_DIR/venv/bin/python"
+elif [ -f "$SCRIPT_DIR/venv/Scripts/python.exe" ] && "$SCRIPT_DIR/venv/Scripts/python.exe" -c "import sys" >/dev/null 2>&1; then
+    VENV_PYTHON="$SCRIPT_DIR/venv/Scripts/python.exe"
+elif [ -f "$SCRIPT_DIR/venv/Scripts/python" ] && "$SCRIPT_DIR/venv/Scripts/python" -c "import sys" >/dev/null 2>&1; then
+    VENV_PYTHON="$SCRIPT_DIR/venv/Scripts/python"
 fi
 
 if [ -n "$VENV_PYTHON" ]; then
-    source "$SCRIPT_DIR/venv/Scripts/activate" 2>/dev/null || source "$SCRIPT_DIR/venv/bin/activate" 2>/dev/null || true
+    source "$SCRIPT_DIR/venv/bin/activate" 2>/dev/null || source "$SCRIPT_DIR/venv/Scripts/activate" 2>/dev/null || true
 fi
 
 PYTHON="${VENV_PYTHON:-$(command -v python3 2>/dev/null || command -v python 2>/dev/null || echo python)}"
@@ -56,7 +56,8 @@ if docker volume inspect devsecops-pipeline_scan-reports-vol >/dev/null 2>&1; th
     fi
 fi
 
-if [ ! -d "$REPORTS_DIR" ] || [ -z "$(ls "$REPORTS_DIR"/*.json "$REPORTS_DIR"/*.xml 2>/dev/null)" ]; then
+FOUND_REPORTS=$(find "$REPORTS_DIR" -maxdepth 2 -type f \( -name "*.json" -o -name "*.xml" \) ! -path "*/archive/*" 2>/dev/null | head -n 1)
+if [ -z "$FOUND_REPORTS" ]; then
     error "No scan reports found in $REPORTS_DIR/"
     error "Run scanner first: bash scripts/03-scan.sh"
     exit 1
@@ -91,4 +92,4 @@ $PYTHON -m pipeline.run \
 echo ""
 success "Pipeline complete!"
 info "Outputs in: $OUTPUT_DIR/"
-ls "$OUTPUT_DIR/" 2>/dev/null | head -20
+ls "$OUTPUT_DIR/" 2>/dev/null | head -20 || true

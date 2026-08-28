@@ -18,45 +18,81 @@ VENV_DIR="$SCRIPT_DIR/venv"
 
 header "Step 1/3: Python Virtual Environment"
 
+VENV_USABLE=false
 if [ -d "$VENV_DIR" ]; then
-    warn "Virtual environment already exists — reusing"
+    if [ -f "$VENV_DIR/bin/python" ] && "$VENV_DIR/bin/python" -c "import sys" >/dev/null 2>&1; then
+        VENV_USABLE=true
+    elif [ -f "$VENV_DIR/Scripts/python.exe" ] && "$VENV_DIR/Scripts/python.exe" -c "import sys" >/dev/null 2>&1; then
+        VENV_USABLE=true
+    elif [ -f "$VENV_DIR/Scripts/python" ] && "$VENV_DIR/Scripts/python" -c "import sys" >/dev/null 2>&1; then
+        VENV_USABLE=true
+    fi
+fi
+
+if [ "$VENV_USABLE" = "true" ]; then
+    warn "Virtual environment already exists and is valid — reusing"
 else
+    if [ -d "$VENV_DIR" ]; then
+        warn "Existing virtual environment was created for a different OS/platform — recreating..."
+        rm -rf "$VENV_DIR"
+    fi
     info "Creating virtual environment..."
     PYTHON_CMD=""
-    if command -v python >/dev/null 2>&1 && \
-       python -c 'import sys; sys.exit(0 if sys.version_info[0] >= 3 else 1)' 2>/dev/null; then
-        PYTHON_CMD=$(command -v python)
-    elif command -v python3 >/dev/null 2>&1 && \
-         python3 -c 'import sys; sys.exit(0 if sys.version_info[0] >= 3 else 1)' 2>/dev/null; then
-        PYTHON_CMD=$(command -v python3)
-    fi
+    for cmd in python3 python py; do
+        if command -v "$cmd" >/dev/null 2>&1 && "$cmd" -c 'import sys; sys.exit(0 if sys.version_info[0] >= 3 else 1)' 2>/dev/null; then
+            PYTHON_CMD=$(command -v "$cmd")
+            break
+        fi
+    done
     if [ -z "$PYTHON_CMD" ]; then
-        error "Python not found! Install Python 3.8+ first."
+        error "Python not found! Please install Python 3.8+ (e.g. sudo apt install python3 python3-venv python3-pip)"
         exit 1
     fi
-    $PYTHON_CMD --version 2>&1 | grep -q "Python 3" || {
-        error "Python 3 is required (found: $($PYTHON_CMD --version))"
+    info "Using host Python: $PYTHON_CMD ($($PYTHON_CMD --version 2>&1))"
+    $PYTHON_CMD -m venv "$VENV_DIR" || {
+        error "Failed to create venv. If on Ubuntu/Debian/WSL, run: sudo apt update && sudo apt install -y python3-venv python3-pip"
         exit 1
     }
-    $PYTHON_CMD -m venv "$VENV_DIR"
     success "Virtual environment created"
 fi
 
-# shellcheck disable=SC1091
-source "$VENV_DIR/Scripts/activate" 2>/dev/null || source "$VENV_DIR/bin/activate"
+if [ -f "$VENV_DIR/bin/activate" ]; then
+    source "$VENV_DIR/bin/activate"
+elif [ -f "$VENV_DIR/Scripts/activate" ]; then
+    source "$VENV_DIR/Scripts/activate"
+fi
+
+# Detect python executable in venv
+VENV_PY=""
+if [ -f "$VENV_DIR/bin/python" ] && "$VENV_DIR/bin/python" -c "import sys" >/dev/null 2>&1; then
+    VENV_PY="$VENV_DIR/bin/python"
+elif [ -f "$VENV_DIR/Scripts/python.exe" ] && "$VENV_DIR/Scripts/python.exe" -c "import sys" >/dev/null 2>&1; then
+    VENV_PY="$VENV_DIR/Scripts/python.exe"
+elif [ -f "$VENV_DIR/Scripts/python" ] && "$VENV_DIR/Scripts/python" -c "import sys" >/dev/null 2>&1; then
+    VENV_PY="$VENV_DIR/Scripts/python"
+else
+    VENV_PY=$(command -v python3 || command -v python || echo "python3")
+fi
+
+# Ensure pip is available inside the virtual environment
+if ! "$VENV_PY" -m pip --version >/dev/null 2>&1; then
+    info "Bootstrapping pip in virtual environment..."
+    "$VENV_PY" -m ensurepip --upgrade 2>/dev/null || true
+fi
+
 success "Activated virtual environment"
-info "Python: $(python --version)"
-info "pip:    $(pip --version | cut -d' ' -f1-2)"
+info "Python: $($VENV_PY --version 2>&1)"
+info "pip:    $("$VENV_PY" -m pip --version 2>/dev/null | cut -d' ' -f1-2 || echo 'pip ready')"
 
 header "Step 2/3: Installing Dependencies"
 
-pip install --upgrade pip --quiet 2>/dev/null
+"$VENV_PY" -m pip install --upgrade pip --quiet 2>/dev/null || true
 
-if python -c "import fastapi; import uvicorn; import pandas; import slowapi; import defusedxml" 2>/dev/null; then
+if "$VENV_PY" -c "import fastapi; import uvicorn; import pandas; import slowapi; import defusedxml" 2>/dev/null; then
     warn "Dependencies already installed — skipping"
 else
-    info "Installing project dependencies..."
-    pip install -r "$SCRIPT_DIR/requirements.txt" --quiet
+    info "Installing project dependencies into virtual environment..."
+    "$VENV_PY" -m pip install -r "$SCRIPT_DIR/requirements.txt" --quiet
     success "All dependencies installed"
 fi
 
@@ -113,9 +149,10 @@ else
     [ -n "$GH_TOKEN" ] && info "Keeping existing GitHub token" || warn "Skipping GitHub"
 fi
 
-# Preserve existing integration keys from previous .env
+# Preserve existing integration keys and dashboard password from previous .env
 EXISTING_JIRA_URL=""; EXISTING_JIRA_USER=""; EXISTING_JIRA_TOKEN=""; EXISTING_JIRA_PROJECT=""
 EXISTING_DD_URL=""; EXISTING_DD_TOKEN=""
+EXISTING_DASHBOARD_PASS=""
 if [ -f "$ENV_FILE" ]; then
     EXISTING_JIRA_URL=$(grep "^JIRA_URL=" "$ENV_FILE" 2>/dev/null | cut -d'=' -f2- || true)
     EXISTING_JIRA_USER=$(grep "^JIRA_USER=" "$ENV_FILE" 2>/dev/null | cut -d'=' -f2- || true)
@@ -123,24 +160,38 @@ if [ -f "$ENV_FILE" ]; then
     EXISTING_JIRA_PROJECT=$(grep "^JIRA_PROJECT=" "$ENV_FILE" 2>/dev/null | cut -d'=' -f2- || true)
     EXISTING_DD_URL=$(grep "^DEFECTDOJO_URL=" "$ENV_FILE" 2>/dev/null | cut -d'=' -f2- || true)
     EXISTING_DD_TOKEN=$(grep "^DEFECTDOJO_API_KEY=" "$ENV_FILE" 2>/dev/null | cut -d'=' -f2- || true)
+    EXISTING_DASHBOARD_PASS=$(grep "^DASHBOARD_PASS=" "$ENV_FILE" 2>/dev/null | cut -d'=' -f2- || true)
 fi
 
+# Generate dashboard password if not already present
+DASH_PASS="${EXISTING_DASHBOARD_PASS:-${DASHBOARD_PASS:-}}"
+if [ -z "$DASH_PASS" ]; then
+    DASH_PASS=$("$VENV_PY" -c "import secrets; print(secrets.token_urlsafe(16))" 2>/dev/null || echo "admin12345")
+fi
+export DASHBOARD_PASS="$DASH_PASS"
+
 cat > "$ENV_FILE" << ENVEOF
-# DevSecOps Pipeline — API Keys
+# DevSecOps Pipeline — Configuration & Credentials
+DASHBOARD_USER=admin
+DASHBOARD_PASS=${DASH_PASS}
+
+# API Keys
 GROQ_API_KEY=${GROQ_KEY}
 NVD_API_KEY=${NVD_KEY}
 GITHUB_TOKEN=${GH_TOKEN}
 GITHUB_REPOSITORY=${GH_REPO}
+
 # Jira Integration (configure from dashboard Integrations tab)
 JIRA_URL=${EXISTING_JIRA_URL}
 JIRA_USER=${EXISTING_JIRA_USER}
 JIRA_TOKEN=${EXISTING_JIRA_TOKEN}
 JIRA_PROJECT=${EXISTING_JIRA_PROJECT}
+
 # DefectDojo Integration (configure from dashboard Integrations tab)
 DEFECTDOJO_URL=${EXISTING_DD_URL}
 DEFECTDOJO_API_KEY=${EXISTING_DD_TOKEN}
 ENVEOF
 
-success ".env file written"
+success ".env file written (Dashboard Password: $DASH_PASS)"
 echo ""
 success "Setup complete! Run: bash scripts/02-deploy.sh"

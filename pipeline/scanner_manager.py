@@ -129,6 +129,9 @@ def _get_scan_volume() -> str:
     On Docker Desktop, host paths from /proc/self/mountinfo don't work
     when passed to docker run -v. Instead, use a Docker named volume
     that both the dashboard and scanner containers share.
+
+    When running outside Docker, returns '' to signal that the caller
+    should use a host path bind-mount instead (see _scan_volume_or_host).
     """
     if not os.path.exists("/.dockerenv"):
         return ""  # Not in Docker, use host path
@@ -200,40 +203,96 @@ class ScannerManager:
         except Exception:
             return False
 
-    def check_app_status(self, url: str, timeout: int = 5) -> Dict[str, Any]:
+    _app_status_cache: Dict[str, Any] = {}
+
+    def check_app_status(self, url: str, timeout: float = 1.0) -> Dict[str, Any]:
         import urllib.request
         import urllib.error
         import os as _os
+
+        if not url:
+            return {"url": url, "status": "down", "status_code": None, "response_time_ms": 0}
+
+        now = time.time()
+        cached = self._app_status_cache.get(url)
+        if cached and (now - cached[0]) < 10.0:
+            return cached[1]
+
         start = time.time()
-
-        # Inside Docker, localhost refers to the container itself.
-        # Replace with host.docker.internal to reach host services.
         check_url = url
-        if _os.path.exists("/.dockerenv") and "localhost" in check_url:
-            check_url = check_url.replace("localhost", "host.docker.internal")
+        if _os.path.exists("/.dockerenv"):
+            check_url = check_url.replace("localhost", "host.docker.internal").replace("127.0.0.1", "host.docker.internal")
 
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) DevSecOps-Scanner/1.0"}
+        result = {"url": url, "status": "down", "status_code": None, "response_time_ms": 0}
         try:
-            req = urllib.request.Request(check_url, method="HEAD")
-            resp = urllib.request.urlopen(req, timeout=timeout)
-            return {"url": url, "status": "up", "status_code": resp.status,
-                    "response_time_ms": round((time.time() - start) * 1000)}
+            req = urllib.request.Request(check_url, headers=headers, method="GET")
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                result = {
+                    "url": url,
+                    "status": "up",
+                    "status_code": resp.status,
+                    "response_time_ms": round((time.time() - start) * 1000),
+                }
         except urllib.error.HTTPError as e:
-            return {"url": url, "status": "up", "status_code": e.code,
-                    "response_time_ms": round((time.time() - start) * 1000)}
+            result = {
+                "url": url,
+                "status": "up",
+                "status_code": e.code,
+                "response_time_ms": round((time.time() - start) * 1000),
+            }
         except Exception:
-            return {"url": url, "status": "down", "status_code": None,
-                    "response_time_ms": round((time.time() - start) * 1000)}
+            result = {
+                "url": url,
+                "status": "down",
+                "status_code": None,
+                "response_time_ms": round((time.time() - start) * 1000),
+            }
+
+        self._app_status_cache[url] = (now, result)
+        return result
 
     def check_all_apps(self, products_config: Dict) -> Dict[str, Dict]:
-        return {pid: self.check_app_status(cfg.get("url", "")) for pid, cfg in products_config.items() if cfg.get("url")}
+        import concurrent.futures
+        results = {}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+            future_to_pid = {
+                executor.submit(self.check_app_status, cfg.get("url", ""), 1.0): pid
+                for pid, cfg in products_config.items()
+                if cfg.get("url")
+            }
+            for future in concurrent.futures.as_completed(future_to_pid):
+                pid = future_to_pid[future]
+                try:
+                    results[pid] = future.result()
+                except Exception:
+                    results[pid] = {"url": "", "status": "down", "status_code": None, "response_time_ms": 0}
+        return results
 
     def _validate_target_url(self, url: str) -> str:
+        if not url:
+            raise ValueError("Target URL is empty")
+        if not url.startswith("http://") and not url.startswith("https://"):
+            url = f"http://{url}"
         parsed = urlparse(url)
-        if parsed.scheme not in ("http", "https"):
-            raise ValueError(f"Invalid URL scheme: {parsed.scheme!r}")
         if not parsed.netloc:
             raise ValueError("Missing host in URL")
-        return f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+        path = parsed.path or "/"
+        query = f"?{parsed.query}" if parsed.query else ""
+        return f"{parsed.scheme}://{parsed.netloc}{path}{query}"
+
+    def _scan_volume_mount(self, container_path: str) -> List[str]:
+        """Build the -v flag for Docker scanner containers.
+
+        When running inside Docker (named volume available), use the volume.
+        When running outside Docker, use a host-path bind-mount so the
+        scanner container can write output that the host can read.
+        """
+        if self._scan_volume:
+            return ["-v", f"{self._scan_volume}:{container_path}"]
+        # Outside Docker — bind-mount the host reports_dir (using forward slashes for Windows Docker)
+        mount_src = self.reports_dir.replace("\\", "/")
+        return ["-v", f"{mount_src}:{container_path}"]
 
     def _build_docker_run_cmd(self, job: ScanJob, target_url: str) -> List[str]:
         image = SCANNER_IMAGES.get(job.scanner, "")
@@ -244,16 +303,13 @@ class ScannerManager:
         resource_flags = ["--memory", res["memory"], "--cpus", res["cpus"]]
 
         # Detect Docker network — use devsecops-net if dashboard runs in compose
-        # When on the compose network, use container names directly
-        # (e.g. http://juiceshop:3000) instead of host.docker.internal
         use_compose_net = False
-        network_flags = ["--network", "host"]
         import subprocess as _sp
         try:
-            _sp.run(["docker", "network", "inspect", "devsecops-pipeline_devsecops-net"],
+            r = _sp.run(["docker", "network", "inspect", "devsecops-pipeline_devsecops-net"],
                     capture_output=True, timeout=5)
-            use_compose_net = True
-            network_flags = ["--network", "devsecops-pipeline_devsecops-net"]
+            if r.returncode == 0:
+                use_compose_net = True
         except Exception:
             pass
 
@@ -265,15 +321,22 @@ class ScannerManager:
             "bwapp": "bwapp",
         }
         if use_compose_net and job.product in product_to_container:
+            network_flags = ["--network", "devsecops-pipeline_devsecops-net"]
             container_name_url = product_to_container[job.product]
-            port = target_url.split(":")[-1].split("/")[0] if ":" in target_url else "80"
-            host_access = f"http://{container_name_url}:{port}"
+            if job.product == "bwapp":
+                host_access = "http://bwapp:80/login.php"
+            else:
+                port = target_url.split(":")[-1].split("/")[0] if ":" in target_url else "80"
+                host_access = f"http://{container_name_url}:{port}"
         else:
-            host_access = target_url.replace("localhost", "host.docker.internal")
+            network_flags = []
+            host_access = target_url.replace("localhost", "host.docker.internal").replace("127.0.0.1", "host.docker.internal")
+            if job.product == "bwapp" and not host_access.endswith(".php"):
+                host_access = host_access.rstrip("/") + "/login.php"
 
         if job.scanner == "nuclei":
             return ["docker", "run", "--rm", "--name", container_name] + resource_flags + network_flags + [
-                "--add-host=host.docker.internal:host-gateway", "-v", f"{self._scan_volume}:/out",
+                "--add-host=host.docker.internal:host-gateway"] + self._scan_volume_mount("/out") + [
                 image, "-u", host_access,
                 "-severity", "critical,high,medium,low",
                 "-timeout", "30", "-retries", "2",
@@ -282,22 +345,22 @@ class ScannerManager:
         elif job.scanner == "zap":
             return ["docker", "run", "--rm", "--name", container_name] + resource_flags + network_flags + [
                 "--add-host=host.docker.internal:host-gateway",
-                "--user", "root",
-                "-v", f"{self._scan_volume}:/zap/wrk",
-                image, "zap-baseline.py", "-t", host_access, "-J", output_name,
+                "--user", "root"] + self._scan_volume_mount("/zap/wrk") + [
+                image, "zap-baseline.py", "-t", host_access, "-J", output_name, "-I",
             ]
         elif job.scanner == "trivy":
             docker_sock = "/var/run/docker.sock"
             if not os.path.exists(docker_sock):
                 docker_sock = "//var/run/docker.sock"
-            return ["docker", "run", "--rm", "--name", container_name] + resource_flags + [
-                "-v", f"{self._scan_volume}:/out", "-v", f"{docker_sock}:/var/run/docker.sock",
+            return ["docker", "run", "--rm", "--name", container_name] + resource_flags + self._scan_volume_mount("/out") + [
+                "-v", f"{docker_sock}:/var/run/docker.sock",
                 image, "image", "--format", "json", "-o", f"/out/{output_name}",
                 self._resolve_trivy_image(target_url),
             ]
         elif job.scanner == "wapiti":
             return ["docker", "run", "--rm", "--name", container_name] + resource_flags + network_flags + [
-                "--add-host=host.docker.internal:host-gateway", "-v", f"{self._scan_volume}:/out",
+                "--add-host=host.docker.internal:host-gateway",
+                "--entrypoint", "wapiti"] + self._scan_volume_mount("/out") + [
                 image, "-u", host_access, "-f", "json", "-o", f"/out/{output_name}",
                 "-t", "10", "--level", "1",
             ]
@@ -307,12 +370,12 @@ class ScannerManager:
             parsed = _urlparse(host_access)
             nmap_host = parsed.hostname or host_access
             nmap_port = parsed.port
-            nmap_flags = ["-p-", "-oX", f"/out/{job.product}_{job.scanner}.xml"]
-            if nmap_port:
-                nmap_flags = ["-p", str(nmap_port), "-oX", f"/out/{job.product}_{job.scanner}.xml"]
+            if not nmap_port:
+                nmap_port = 443 if parsed.scheme == "https" else 80
+            nmap_flags = ["-p", str(nmap_port), "-oX", f"/out/{job.product}_{job.scanner}.xml"]
             return ["docker", "run", "--rm", "--name", container_name] + resource_flags + network_flags + [
-                "--add-host=host.docker.internal:host-gateway", "-v", f"{self._scan_volume}:/out",
-                image, "-sV", "-sC", "--script", "vulners,default",
+                "--add-host=host.docker.internal:host-gateway"] + self._scan_volume_mount("/out") + [
+                image, "-sV", "--script", "vulners",
                 "--script-timeout", "120s",
             ] + nmap_flags + ["-T4", "--open", nmap_host]
         else:
@@ -348,6 +411,23 @@ class ScannerManager:
             job.status = ScannerStatus.RUNNING
             job.started_at = time.time()
             self._notify(job)
+
+            # Pre-flight bWAPP database setup if needed
+            if job.product == "bwapp":
+                try:
+                    import urllib.request as _urllib_req
+                    for p_url in [
+                        "http://127.0.0.1:8080/bWAPP/install.php?install=yes",
+                        "http://localhost:8080/bWAPP/install.php?install=yes",
+                        target_url.replace("/login.php", "/install.php?install=yes"),
+                        target_url.rstrip("/") + "/install.php?install=yes",
+                    ]:
+                        try:
+                            _urllib_req.urlopen(p_url, timeout=3)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
 
             # Skip URL validation for trivy (uses container names, not HTTP URLs)
             if job.scanner != "trivy":
@@ -393,14 +473,21 @@ class ScannerManager:
 
             job.exit_code = process.returncode
             job.finished_at = time.time()
-            # Exit 0 = success, exit 1 = failure, exit 2 = warnings (ZAP uses 2 for findings)
-            success_codes = {0, 2} if job.scanner == "zap" else {0}
-            job.status = ScannerStatus.COMPLETED if process.returncode in success_codes else ScannerStatus.FAILED
-            if process.returncode not in success_codes:
+            
+            # Always attempt copying results from Docker volume to host first
+            self._copy_results_to_host(job)
+
+            # Check if output file was created and is non-empty
+            out_file_json = os.path.join(self.reports_dir, f"{job.product}_{job.scanner}.json")
+            out_file_xml = os.path.join(self.reports_dir, f"{job.product}_{job.scanner}.xml")
+            out_exists = (os.path.exists(out_file_json) and os.path.getsize(out_file_json) > 0) or \
+                         (os.path.exists(out_file_xml) and os.path.getsize(out_file_xml) > 0)
+
+            # Exit 0 = success, exit 1/2 = warnings or findings for DAST tools
+            success_codes = {0, 1, 2} if job.scanner in ("zap", "nuclei") else {0}
+            job.status = ScannerStatus.COMPLETED if (process.returncode in success_codes or out_exists) else ScannerStatus.FAILED
+            if job.status == ScannerStatus.FAILED:
                 job.error = f"Exit code {process.returncode}"
-            else:
-                # Copy results from Docker volume back to host reports_dir
-                self._copy_results_to_host(job)
         except Exception as e:
             job.status = ScannerStatus.FAILED
             job.error = str(e)
@@ -438,13 +525,26 @@ class ScannerManager:
     def start_product_scans(self, product_id: str, product_config: Dict, scanners: Optional[List[str]] = None) -> List[ScanJob]:
         url = product_config.get("url", "")
         scanner_targets = product_config.get("scanners", {})
-        target_scanners = scanners or list(scanner_targets.keys())
+        
+        # Determine target scanners: explicit -> configured -> default web suite
+        if scanners:
+            target_scanners = scanners
+        elif scanner_targets:
+            target_scanners = list(scanner_targets.keys())
+        else:
+            target_scanners = ["nuclei", "zap", "wapiti", "nmap"]
+            if product_config.get("trivy_image"):
+                target_scanners.append("trivy")
+
         jobs = []
 
         for scanner in target_scanners:
             if scanner not in SCANNER_IMAGES:
                 continue
-            target = scanner_targets.get(scanner, url)
+            if scanner == "trivy":
+                target = scanner_targets.get(scanner, product_config.get("trivy_image", ""))
+            else:
+                target = scanner_targets.get(scanner, url)
             if not target:
                 continue
             job_id = self._next_job_id()

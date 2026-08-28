@@ -81,7 +81,7 @@ class DefectDojoClient:
         resp = self._api("POST", "import-scan/", data={
             "engagement": engagement_id, "scan_type": "JSON Import",
             "close_old_findings": "false", "skip_duplicates": "true",
-        }, files={("file", ("findings.json", json_payload, "application/json"))})
+        }, files={"file": ("findings.json", json_payload, "application/json")})
         if resp.status_code in (200, 201):
             data = resp.json()
             return {"configured": True, "imported": data.get("test", {}).get("finding_count", len(findings_data)),

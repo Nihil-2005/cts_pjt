@@ -101,9 +101,17 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Risk Intelligence Dashboard</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
-<script src="dash-static/chart.umd.min.js" defer></script>
-<script src="dash-static/d3.min.js" defer></script>
+<script>
+  (function(){
+    var base = location.protocol === 'file:' ? 'dash-static/' : '/dash-static/';
+    ['chart.umd.min.js', 'd3.min.js'].forEach(function(s){
+      var sc = document.createElement('script');
+      sc.src = base + s;
+      sc.defer = true;
+      document.head.appendChild(sc);
+    });
+  })();
+</script>
 <style>
 /* ═══════════════════ 1. DESIGN TOKENS ═══════════════════ */
 :root{
@@ -226,12 +234,12 @@ select.input option{background:var(--bg-elevated);color:var(--text-primary)}
 
 /* --- Utility --- */
 .mono{font-family:var(--font-mono);font-variant-numeric:tabular-nums}
-.truncate{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block}
+.truncate{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dimmed{color:var(--text-muted)}
 .no-wrap{white-space:nowrap}
 .hidden{display:none}
 .empty-state-overlay{position:absolute;top:0;left:0;right:0;bottom:0;background:var(--bg-elevated);z-index:5;display:flex;align-items:center;justify-content:center;color:var(--text-tertiary);font-size:var(--text-xs)}
-.text-critical{color:var(--risk-critical)}.text-low{color:var(--risk-low)}
+.text-critical{color:var(--risk-critical)}.text-high{color:var(--risk-high)}.text-low{color:var(--risk-low)}
 .mb-4{margin-bottom:var(--space-4)}.mb-6{margin-bottom:var(--space-6)}
 
 /* ═══════════════════ 5. PAGES ═══════════════════ */
@@ -446,10 +454,21 @@ select.input option{background:var(--bg-elevated);color:var(--text-primary)}
       </div>
     </div>
   </div>
-  <div class="card" style="margin-top:var(--space-5)">
-    <div class="card-header">Scanner Progress</div>
-    <div id="scanner-progress">
-      <div class="empty-state" style="padding:var(--space-5)"><p class="empty-state-desc">No active scans</p></div>
+  <div class="grid-2" style="margin-top:var(--space-5);gap:var(--space-4)">
+    <div class="card">
+      <div class="card-header">Scanner Progress</div>
+      <div id="scanner-progress">
+        <div class="empty-state" style="padding:var(--space-5)"><p class="empty-state-desc">No active scans</p></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-header" style="display:flex;align-items:center;justify-content:space-between">
+        <span>Pipeline Status Monitor</span>
+        <span id="pipeline-status-badge" class="badge" style="font-size:10px;background:rgba(107,114,128,0.1);color:#6B7280;border:1px solid rgba(107,114,128,0.3)">IDLE</span>
+      </div>
+      <div id="pipeline-monitor">
+        <div class="empty-state" style="padding:var(--space-5)"><p class="empty-state-desc">Pipeline is idle. Click "Run Pipeline" to start.</p></div>
+      </div>
     </div>
   </div>
 </main>
@@ -656,7 +675,8 @@ const App={
       if(location.pathname!==newPath){history.replaceState(null,null,newPath);}
     }
     if(page==='attackpaths'&&!self.state.apInited){self.attackPaths.init();self.state.apInited=true;}
-    if(page==='control'){self.control.loadStatus();self.control.connectWS();self.control.loadJobs();}
+    if(page==='products'){self.products.init();}
+    if(page==='control'){self.control.loadStatus();self.control.connectWS();self.control.loadJobs();self.control.loadPipelineStatus();}
   },
 
   // TODO: extend for future modal system
@@ -813,7 +833,8 @@ const App={
         return '<th style="'+(c.w?'width:'+c.w:'')+'" '+(c.sortable?'data-col="'+c.k+'"':'')+'>'+c.label+(c.sortable?'<span class="sort-arrow">\u2195</span>':'')+'</th>';
       }).join('')+'</tr>';
       // Populate filter dropdowns with correct sort
-      var priorities=[...new Set(F.map(function(f){return f.priority;}))].sort(function(a,b){return parseInt(a.slice(1))-parseInt(b.slice(1));});
+      var pOrder={Critical:1,High:2,Medium:3,Low:4,P1:1,P2:2,P3:3,P4:4};
+      var priorities=[...new Set(F.map(function(f){return f.priority;}).filter(Boolean))].sort(function(a,b){return (pOrder[a]||99)-(pOrder[b]||99)||String(a).localeCompare(String(b));});
       var severities=['critical','high','medium','low','info'];
       var scanners=[...new Set(F.map(function(f){return f.scanner;}))].sort();
       [['f-priority',priorities],['f-severity',severities],['f-scanner',scanners]].forEach(function(arr){
@@ -897,16 +918,17 @@ const App={
     },
     renderRow(f){
       var sc=App.scoreColor(f.score);
+      var sevClass=App.sevClass(f.severity);
       var epssStr=f.epss_score>0?(f.epss_score*100).toFixed(1)+'%':'-';
       var title=f.title||'';
       var truncated=title.length>50?title.substring(0,50)+'...':title;
       var detailHtml=this.renderDetail(f);
-      return '<tr class="data-row" data-rank="'+f.rank+'">'+
-        '<td class="mono dimmed" style="font-size:11px">'+f.rank+'</td>'+
-        '<td><span class="score-num" style="color:'+sc+'">'+f.score+'</span></td>'+
+      return '<tr class="interactive-row" onclick="App.findings.toggleDetail('+f.rank+')">'+
+        '<td><b>#'+f.rank+'</b></td>'+
+        '<td><span class="score-badge score-'+sevClass+'">'+(f.score!=null?f.score.toFixed(1):'—')+'</span></td>'+
         '<td><span class="badge '+App.priClass(f.priority)+'">'+App.esc(f.priority)+'</span></td>'+
         '<td><span class="badge '+App.sevClass(f.severity)+'">'+App.esc(f.severity)+'</span></td>'+
-        '<td><span class="truncate" style="max-width:300px;color:var(--text-primary);font-weight:500" title="'+App.tooltipText(title)+'">'+App.esc(truncated)+'</span></td>'+
+        '<td class="truncate title-cell" style="max-width:260px" title="'+App.esc(f.title)+'">'+App.esc(f.title)+'</td>'+
         '<td class="truncate" style="max-width:100px">'+App.esc(f.product)+'</td>'+
         '<td class="dimmed" style="font-size:11px">'+App.esc(f.scanner)+'</td>'+
         '<td>'+(f.cve?(f.advisory_type==='ghsa'?'<a class="cve-link" href="https://github.com/advisories/'+App.esc(f.cve)+'" target="_blank" onclick="event.stopPropagation()">'+App.esc(f.cve)+'</a>':f.advisory_type==='nswg'?'<span class="cve-link" title="Node.js Security WG" onclick="event.stopPropagation()">'+App.esc(f.cve)+'</span>':'<a class="cve-link" href="https://nvd.nist.gov/vuln/detail/'+App.esc(f.cve)+'" target="_blank" onclick="event.stopPropagation()">'+App.esc(f.cve)+'</a>'):'<span class="dimmed">\u2014</span>')+'</td>'+
@@ -932,7 +954,7 @@ const App={
       var exploitBadge=f.exploit_available?'<span style="color:var(--risk-high);font-weight:700">YES</span> <span style="color:var(--text-tertiary);font-size:10px">('+App.esc(f.exploit_source||'')+')</span>':'<span style="color:var(--text-tertiary)">No</span>';
       var cvssRaw=f.nvd_cvss!=null?f.nvd_cvss.toFixed(1)+' (NVD)':(f.scanner_cvss!=null&&f.scanner_cvss>0?f.scanner_cvss.toFixed(1)+' (scanner)':'N/A');
       var cvssPts=(sb.cvss||0).toFixed(1);
-      var cweLink=f.cwe?'<a href="https://cwe.mitre.org/data/definitions/'+App.esc(f.cwe.replace('CWE-',''))+'.html" target="_blank" style="color:var(--infoBar)">'+App.esc(f.cwe)+'</a>':'N/A';
+      var cweLink=f.cwe?'<a href="https://cwe.mitre.org/data/definitions/'+App.esc(f.cwe.replace('CWE-',''))+'.html" target="_blank" style="color:var(--risk-info)">'+App.esc(f.cwe)+'</a>':'N/A';
       var pkgInfo=f.package?'<div class="detail-row-item"><span class="detail-key">Package</span><span class="detail-val">'+App.esc(f.package)+(f.fixed_version?' <span style="color:var(--risk-low)">\u2192 '+App.esc(f.fixed_version)+'</span>':' <span style="color:var(--text-tertiary)">(no fix)</span>')+'</span></div>':'';
       var instVer=f.installed_version?'<div class="detail-row-item"><span class="detail-key">Installed</span><span class="detail-val" style="font-family:monospace;font-size:11px">'+App.esc(f.installed_version)+'</span></div>':'';
       var fixVer=f.fixed_version?'<div class="detail-row-item"><span class="detail-key">Fixed In</span><span class="detail-val" style="font-family:monospace;font-size:11px;color:var(--risk-low)">'+App.esc(f.fixed_version)+'</span></div>':'';
@@ -958,6 +980,7 @@ const App={
         '<div class="detail-row-item"><span class="detail-key">CWE</span><span class="detail-val">'+cweLink+'</span></div>'+
         instVer+fixVer+pkgInfo+evidence+
         '<div class="detail-row-item"><span class="detail-key">Owner</span><span class="detail-val">'+App.esc(f.owner||'\u2014')+' \u00b7 SLA '+f.sla_hours+'h</span></div>'+
+        (f.issue_url ? '<div class="detail-row-item"><span class="detail-key">GitHub Issue</span><span class="detail-val"><a class="cve-link" href="'+App.esc(f.issue_url)+'" target="_blank">#'+(f.issue_url.split('/').pop())+' (View on GitHub \u2197)</a></span></div>' : (f.github_issue ? '<div class="detail-row-item"><span class="detail-key">GitHub Issue</span><span class="detail-val">#'+App.esc(f.github_issue)+'</span></div>' : ''))+
         '</div>'+
         '<div class="detail-section"><div class="detail-section-title">\u{1f50d} Raw Enrichment Data (Before Scoring)</div>'+
         '<div style="padding:var(--space-3);background:var(--bg-base);border-radius:6px;margin-bottom:var(--space-3)">'+
@@ -1000,7 +1023,8 @@ const App={
         return s;
       }
       rows.forEach(function(f){
-        csvRows.push([f.rank,f.score,f.priority,f.severity,csvEscape(f.title),csvEscape(f.product),f.scanner,f.cve||'',f.kev?'YES':'NO',(f.epss_score*100).toFixed(1),f.sla_hours,csvEscape(f.owner)].join(','));
+        var epssVal = f.epss_score != null ? (f.epss_score * 100).toFixed(1) + '%' : '-';
+        csvRows.push([f.rank, f.score, csvEscape(f.priority), csvEscape(f.severity), csvEscape(f.title), csvEscape(f.product), csvEscape(f.scanner), csvEscape(f.cve||''), f.kev?'YES':'NO', epssVal, f.sla_hours, csvEscape(f.owner)].join(','));
       });
       var blob=new Blob([csvRows.join('\n')],{type:'text/csv'});
       var a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='findings_export.csv';a.click();
@@ -1146,15 +1170,27 @@ const App={
   /* ═══ PRODUCTS ═══ */
   products:{
     init(){
+      var self=this;
+      self.render();
+      App.apiFetch('/api/products').then(function(data){
+        if(data&&data.products){
+          App.data.products=data.products;
+          self.render();
+        }
+      }).catch(function(){});
+    },
+    render(){
       var P=App.data.products||{};var keys=Object.keys(P);
       var tp=App.$('tc-products');if(tp)tp.textContent='('+keys.length+')';
+      var ptw=App.$('products-table-wrap');
+      if(!ptw)return;
       if(!keys.length){
-        App.$('products-table-wrap').innerHTML='<div class="empty-state"><p class="empty-state-title">No Products Configured</p><p class="empty-state-desc">Add one using the form below.</p></div>';
+        ptw.innerHTML='<div class="empty-state"><p class="empty-state-title">No Products Configured</p><p class="empty-state-desc">Add one using the form below.</p></div>';
         return;
       }
       // Pre-compute findingsByProduct to avoid O(n*m) inside map
       var findingsByProduct={};
-      App.data.findings.forEach(function(f){
+      (App.data.findings||[]).forEach(function(f){
         if(!f.product)return;
         if(!findingsByProduct[f.product])findingsByProduct[f.product]={total:0,p1:0,p2:0};
         findingsByProduct[f.product].total++;
@@ -1165,35 +1201,42 @@ const App={
         var p=P[k];var fc=findingsByProduct[k]||{total:0,p1:0,p2:0};
         return '<tr><td><strong>'+App.esc(p.display_name||k)+'</strong><br><span class="dimmed" style="font-size:11px">'+App.esc(k)+'</span></td><td class="mono" style="font-size:11px">'+App.esc(p.url||'\u2014')+'</td><td class="dimmed" style="font-size:11px">'+App.esc(p.owner||'\u2014')+'</td><td class="mono" style="font-size:11px">'+(p.asset_criticality||5)+'/10</td><td class="mono" style="font-size:11px">'+fc.total+'</td><td>'+(fc.p1>0?'<span class="badge b-p1">'+fc.p1+'</span>':'')+(fc.p2>0?' <span class="badge b-p2">'+fc.p2+'</span>':'')+'</td><td><div style="display:flex;gap:var(--space-1)"><button class="btn btn-secondary btn-sm" data-scan="'+App.esc(k)+'">Scan</button><button class="btn btn-sm" style="background:rgba(239,68,68,0.1);color:#EF4444;border:1px solid rgba(239,68,68,0.2)" data-delete="'+App.esc(k)+'">Delete</button></div></td></tr>';
       }).join('');
-      var ptw=App.$('products-table-wrap');
       ptw.innerHTML='<table class="data-table"><thead><tr><th>Product</th><th>URL</th><th>Owner</th><th>Criticality</th><th>Findings</th><th>Critical/High</th><th>Actions</th></tr></thead><tbody>'+rows+'</tbody></table>';
-      // Event delegation for scan buttons
-      ptw.addEventListener('click',function(e){
+      // Event delegation for scan and delete buttons
+      ptw.onclick=function(e){
         var scanBtn=e.target.closest('[data-scan]');if(scanBtn){App.products.scan(scanBtn.dataset.scan);return;}
         var delBtn=e.target.closest('[data-delete]');if(delBtn){App.products.remove(delBtn.dataset.delete);}
-      });
+      };
     },
     add(){
-      var id=(App.$('ap-id').value||'').trim();var name=(App.$('ap-name').value||'').trim()||id;var url=(App.$('ap-url').value||'').trim();
-      var repo=(App.$('ap-repo').value||'').trim();var owner=(App.$('ap-owner').value||'').trim();
-      var crit=parseInt(App.$('ap-crit').value)||5;var sens=parseInt(App.$('ap-sens').value)||5;
+      var id=(App.$('ap-id').value||'').trim().toLowerCase().replace(/\s+/g,'_');
+      var name=(App.$('ap-name').value||'').trim()||id;
+      var url=(App.$('ap-url').value||'').trim();
+      var repo=(App.$('ap-repo').value||'').trim();
+      var owner=(App.$('ap-owner').value||'').trim()||'unassigned';
+      var crit=parseInt(App.$('ap-crit').value)||5;
+      var sens=parseInt(App.$('ap-sens').value)||5;
+      var trivy=(App.$('ap-trivy')?App.$('ap-trivy').value:'').trim();
       var self=this;
-      if(!id||!url){var m=App.$('ap-msg');if(m){m.textContent='Product ID and URL are required';m.style.color='#EF4444';}return;}
-      App.apiFetch('/api/products',{method:'POST',body:JSON.stringify({product_id:id,display_name:name,url:url,github_repo:repo,owner:owner||'unassigned',asset_criticality:crit,data_sensitivity:sens})}).then(function(data){
-        var m2=App.$('ap-msg');if(m2){m2.textContent=data.status==='created'?'Product saved!':'Updated';m2.style.color='#22C55E';}
+      if(!id||!url){
+        var m=App.$('ap-msg');if(m){m.textContent='Product ID and URL are required';m.style.color='#EF4444';}
+        App.toast('Product ID and Target URL are required','error');
+        return;
+      }
+      if(!/^https?:\/\//i.test(url)){url='http://'+url;}
+      App.toast('Saving product '+id+'...','info');
+      App.apiFetch('/api/products',{method:'POST',body:JSON.stringify({product_id:id,display_name:name,url:url,github_repo:repo,owner:owner,asset_criticality:crit,data_sensitivity:sens,trivy_image:trivy})}).then(function(data){
+        App.toast('Product "'+(name||id)+'" saved successfully!','success');
+        var m2=App.$('ap-msg');if(m2){m2.textContent='Product saved!';m2.style.color='#22C55E';}
         ['ap-id','ap-name','ap-url','ap-repo','ap-owner','ap-trivy'].forEach(function(fid){var el=App.$(fid);if(el)el.value='';});
         return App.apiFetch('/api/products');
       }).then(function(data){
         if(data&&data.products){App.data.products=data.products;}
-        self.init();
+        self.render();
       }).catch(function(e){
-        var m3=App.$('ap-msg');
-        if(e.message&&e.message.indexOf('409')>-1){if(m3){m3.textContent='Product already exists';m3.style.color='#EF4444';}return;}
-        App.data.products=App.data.products||{};
-        App.data.products[id]={display_name:name,owner:owner||'unassigned',asset_criticality:crit,url:url,github_repo:repo};
-        if(m3){m3.textContent='Saved locally (offline)';m3.style.color='#EAB308';}
-        ['ap-id','ap-name','ap-url','ap-repo','ap-owner','ap-trivy'].forEach(function(fid){var el=App.$(fid);if(el)el.value='';});
-        self.init();
+        var err=e.message||'Failed to save product';
+        var m3=App.$('ap-msg');if(m3){m3.textContent=err;m3.style.color='#EF4444';}
+        App.toast(err,'error');
       });
     },
     scan(id){
@@ -1201,7 +1244,7 @@ const App={
       App.apiFetch('/api/scans/start',{method:'POST',body:JSON.stringify({product:id})}).then(function(data){
         var jobCount=(data.jobs||[]).length;
         App.toast('Scan started. '+jobCount+' scanner(s) queued.','success');
-        App._pollScansAndPipeline(id,jobCount);
+        App.products._pollScansAndPipeline(id,jobCount);
       }).catch(function(e){App.toast('Scan failed: '+(e.message||'Network error'),'error');});
     },
     _pollScansAndPipeline(id,jobCount){
@@ -1228,10 +1271,18 @@ const App={
     },
     remove(id){
       if(!confirm('Delete product "'+id+'"?'))return;
+      var self=this;
       App.apiFetch('/api/products/'+id,{method:'DELETE'}).then(function(data){
-        App.toast('Product '+id+' deleted.','success');
+        if(data&&data.error){
+          App.toast('Delete failed: '+data.error,'error');
+        }else{
+          App.toast('Product '+id+' deleted.','success');
+        }
         delete App.data.products[id];
-        App.products.init();
+        return App.apiFetch('/api/products');
+      }).then(function(res){
+        if(res&&res.products){App.data.products=res.products;}
+        self.render();
       }).catch(function(e){
         App.toast('Delete failed: '+(e.message||'Network error'),'error');
       });
@@ -1241,16 +1292,14 @@ const App={
       var msg=App.$('import-msg');
       if(!fileInput||!fileInput.files.length){if(msg){msg.textContent='Select a file first';msg.style.color='#EF4444';}return;}
       var file=fileInput.files[0];var sourceName=(source?source.value:'')||'external';
-      var formData=new FormData();
-      formData.append('file',file);
       if(msg){msg.textContent='Importing...';msg.style.color='#3B82F6';}
       fetch('/api/import/upload?source_name='+encodeURIComponent(sourceName),{
-        method:'POST',headers:{'Authorization':'Bearer '+document.cookie.match(/access_token=([^;]+)/)?.[1]||''},
+        method:'POST',
         body:file
       }).then(function(r){return r.json();}).then(function(data){
         if(data.error){if(msg){msg.textContent='Error: '+data.error;msg.style.color='#EF4444';}return;}
-        if(msg){msg.textContent='Imported '+data.imported+' findings from '+data.source;msg.style.color='#22C55E';}
-        App.toast('Imported '+data.imported+' findings','success');
+        if(msg){msg.textContent='Imported '+(data.imported||0)+' findings from '+(data.source||sourceName);msg.style.color='#22C55E';}
+        App.toast('Imported '+(data.imported||0)+' findings','success');
         fileInput.value='';
       }).catch(function(e){if(msg){msg.textContent='Failed: '+e.message;msg.style.color='#EF4444';}});
     }
@@ -1259,26 +1308,51 @@ const App={
   /* ═══ CONTROL ═══ */
   control:{
     loadStatus(){
+      var el=App.$('app-status-list');if(!el)return;
       App.apiFetch('/api/products').then(function(data){
-        if(data.error){App.$('app-status-list').innerHTML='<p class="dimmed" style="font-size:var(--text-xs)">API not available in standalone mode.</p>';return;}
-        var el=App.$('app-status-list');if(!el)return;
-        var products=data.products||{};var statuses=data.app_statuses||{};var keys=Object.keys(products);
+        var products=(data&&data.products)||App.data.products||{};
+        var statuses=(data&&data.app_statuses)||{};
+        var keys=Object.keys(products);
         if(!keys.length){el.innerHTML='<p class="dimmed" style="font-size:var(--text-xs)">No products configured.</p>';return;}
         el.innerHTML=keys.map(function(k){
           var p=products[k];var s=statuses[k]||{};var isUp=s.status==='up';
           var dotColor=isUp?'#22C55E':'#EF4444';
-          return '<div style="display:flex;align-items:center;gap:var(--space-2);padding:var(--space-2) 0;border-bottom:1px solid var(--border-subtle);font-size:var(--text-xs)"><span class="status-dot" style="background:'+dotColor+'"></span><span style="flex:1"><strong style="color:var(--text-primary)">'+App.esc(p.display_name||k)+'</strong> <span class="dimmed">'+App.esc(p.url||'')+'</span></span><span class="dimmed">'+(isUp?'UP ('+s.response_time_ms+'ms)':'DOWN')+'</span></div>';
+          var statusText=s.status?(isUp?'UP ('+s.response_time_ms+'ms)':'DOWN ('+(s.status_code||'timeout')+')'):'Configured';
+          return '<div style="display:flex;align-items:center;gap:var(--space-2);padding:var(--space-2) 0;border-bottom:1px solid var(--border-subtle);font-size:var(--text-xs)"><span class="status-dot" style="background:'+dotColor+'"></span><span style="flex:1"><strong style="color:var(--text-primary)">'+App.esc(p.display_name||k)+'</strong> <span class="dimmed">'+App.esc(p.url||'')+'</span></span><span class="dimmed">'+statusText+'</span></div>';
         }).join('');
-      }).catch(function(){App.$('app-status-list').innerHTML='<p class="dimmed" style="font-size:var(--text-xs)">API not available.</p>';});
+      }).catch(function(){
+        var products=App.data.products||{};var keys=Object.keys(products);
+        if(!keys.length){el.innerHTML='<p class="dimmed" style="font-size:var(--text-xs)">No products configured.</p>';return;}
+        el.innerHTML=keys.map(function(k){
+          var p=products[k];
+          return '<div style="display:flex;align-items:center;gap:var(--space-2);padding:var(--space-2) 0;border-bottom:1px solid var(--border-subtle);font-size:var(--text-xs)"><span class="status-dot" style="background:#3B82F6"></span><span style="flex:1"><strong style="color:var(--text-primary)">'+App.esc(p.display_name||k)+'</strong> <span class="dimmed">'+App.esc(p.url||'')+'</span></span><span class="dimmed">Configured</span></div>';
+        }).join('');
+      });
     },
     connectWS(){
       if(typeof WebSocket==='undefined'||App.state.wsRetries>=5)return;
       var self=this;
       var proto=location.protocol==='https:'?'wss:':'ws:';
       try{
-        App.state.ws=new WebSocket(proto+'//'+location.host+'/ws/live');
+        var wsToken=(document.cookie.match(/access_token=([^;]+)/)||[])[1]||'';
+        App.state.ws=new WebSocket(proto+'//'+location.host+'/ws/live'+(wsToken?'?token='+wsToken:''));
         App.state.ws.onopen=function(){App.state.wsRetries=0;};
-        App.state.ws.onmessage=function(e){try{var msg=JSON.parse(e.data);if(msg.type==='scan_update')self.handleScanUpdate(msg.data);}catch(x){}};
+        App.state.ws.onmessage=function(e){
+          try{
+            var msg=JSON.parse(e.data);
+            if(msg.type==='scan_update')self.handleScanUpdate(msg.data);
+            if(msg.type==='pipeline_update')self.handlePipelineUpdate(msg.data);
+            if(msg.type==='lifecycle_update'){
+              App.data.lifecycle=msg.data;
+              if(App.state.currentTab==='lifecycle')App.lifecycle.init();
+            }
+            if(msg.type==='pipeline_complete'){
+              self.loadPipelineStatus();
+              App.toast('Pipeline execution '+msg.status+'! Updating dashboard...','success');
+              setTimeout(function(){ window.location.reload(); }, 1500);
+            }
+          }catch(x){}
+        };
         App.state.ws.onclose=function(){App.state.wsRetries++;setTimeout(function(){self.connectWS();},5000);};
         App.state.ws.onerror=function(){};
       }catch(x){App.state.wsRetries++;}
@@ -1334,11 +1408,13 @@ const App={
       App.toast('Starting scan for all products...','info');
       App.apiFetch('/api/products').then(function(data){
         var products=data.products||{};
-        // Use allSettled so one failure doesn't kill all scans
-        Promise.allSettled(Object.keys(products).map(function(pid){
+        var pids=Object.keys(products);
+        if(!pids.length){App.toast('No products configured to scan','info');return;}
+        Promise.allSettled(pids.map(function(pid){
           return App.apiFetch('/api/scans/start',{method:'POST',body:JSON.stringify({product:pid})});
         })).then(function(){
           App.toast('Scans started for all products.','success');
+          App.products._pollScansAndPipeline('all', pids.length);
         });
       }).catch(function(e){App.toast('Failed: '+(e.message||'Network error'),'error');});
     },
@@ -1348,11 +1424,19 @@ const App={
         App.toast('Pipeline started. Check status periodically.','success');
       }).catch(function(e){App.toast('Pipeline failed: '+(e.message||'Network error'),'error');});
     },
-    createTickets(){
-      App.toast('Creating GitHub Issues...','info');
-      App.apiFetch('/api/tickets/create?threshold=60',{method:'POST'}).then(function(data){
-        var results=data.results||{};var total=0;Object.values(results).forEach(function(r){total+=(r.created||0);});
-        App.toast('Created '+total+' Issues.','success');
+    createTickets(threshold){
+      var t = threshold != null ? threshold : 40;
+      App.toast('Creating GitHub Issues (score >= '+t+')...','info');
+      App.apiFetch('/api/tickets/create?threshold='+t,{method:'POST'}).then(function(data){
+        var results=data.results||{};
+        var total=results.created!=null?results.created:0;
+        if(!total&&results.per_product){
+          Object.values(results.per_product).forEach(function(p){ total+=(p.created||0); });
+        }
+        var skippedTicketed = results.skipped_ticketed || 0;
+        var msg = 'Created '+total+' new Issues.';
+        if (skippedTicketed > 0) msg += ' ('+skippedTicketed+' already had tickets)';
+        App.toast(msg,'success');
       }).catch(function(e){App.toast('Failed: '+(e.message||'Network error'),'error');});
     },
     syncFromJira(){
@@ -1373,6 +1457,76 @@ const App={
         if(data.docker_available){App.toast('Docker running. Active jobs: '+data.active_jobs,'success');}
         else{App.toast('Docker not available.','error');}
       }).catch(function(e){App.toast('Cannot connect: '+(e.message||'Network error'),'error');});
+    },
+    loadPipelineStatus(){
+      var self=this;
+      App.apiFetch('/api/pipeline/status').then(function(data){
+        self.handlePipelineUpdate(data);
+      }).catch(function(){});
+    },
+    handlePipelineUpdate(state){
+      if(!state)return;
+      var badge=App.$('pipeline-status-badge');
+      var container=App.$('pipeline-monitor');
+      if(!container)return;
+
+      var statusColors={idle:'#6B7280',running:'#3B82F6',completed:'#22C55E',failed:'#EF4444'};
+      var st=state.status||(state.running?'running':'idle');
+      var sc=statusColors[st]||'#6B7280';
+      if(badge){
+        badge.textContent=st.toUpperCase();
+        badge.style.color=sc;
+        badge.style.background=st==='running'?'rgba(59,130,246,0.1)':st==='completed'?'rgba(34,197,94,0.1)':st==='failed'?'rgba(239,68,68,0.1)':'rgba(107,114,128,0.1)';
+        badge.style.border='1px solid '+sc;
+      }
+
+      if(st==='idle'&&(!state.stages||!state.current_stage)){
+        container.innerHTML='<div class="empty-state" style="padding:var(--space-5)"><p class="empty-state-desc">Pipeline is idle. Click "Run Pipeline" to start.</p></div>';
+        return;
+      }
+
+      var stages=state.stages||[
+        {id:1,name:"Ingest & Normalize"},{id:2,name:"Deduplication"},{id:3,name:"Filtering & Quarantine"},
+        {id:4,name:"Threat Intelligence"},{id:5,name:"Attack Path Mapping"},{id:6,name:"Risk Scoring"},
+        {id:7,name:"AI Enrichment"},{id:8,name:"Remediation Engineering"},{id:9,name:"Ranking & Output"}
+      ];
+
+      var curStage=state.current_stage||0;
+      var durStr=state.duration>0?(state.duration+'s'):state.started_at?((Math.round(Date.now()/1000-state.started_at))+'s'):'';
+
+      var html='<div style="margin-bottom:var(--space-3);padding-bottom:var(--space-2);border-bottom:1px solid var(--border-subtle);display:flex;align-items:center;justify-content:space-between">';
+      html+='<div><span style="font-size:var(--text-xs);font-weight:600;color:var(--text-primary)">'+App.esc(state.stage_name||(st==='completed'?'Completed all 9 stages':st==='failed'?'Pipeline Failed':'Ready'))+'</span>';
+      if(state.stage_detail)html+='<div class="dimmed" style="font-size:10px">'+App.esc(state.stage_detail)+'</div>';
+      html+='</div>';
+      if(durStr)html+='<span class="mono dimmed" style="font-size:11px">'+durStr+'</span>';
+      html+='</div>';
+
+      html+='<div style="display:flex;flex-direction:column;gap:4px">';
+      stages.forEach(function(s){
+        var isCurrent=s.id===curStage&&st==='running';
+        var isDone=s.status==='completed'||(st==='completed')||(curStage>s.id);
+        var isFail=st==='failed'&&s.id===curStage;
+        var dotColor=isDone?'#22C55E':isCurrent?'#3B82F6':isFail?'#EF4444':'#4B5563';
+        var icon=isDone?'\u2713':isCurrent?'\u25b6':isFail?'\u2717':'\u2022';
+        var textColor=isCurrent?'var(--text-primary)':isDone?'var(--text-secondary)':'var(--text-tertiary)';
+        var fontWeight=isCurrent?'600':'400';
+
+        html+='<div style="display:flex;align-items:center;gap:var(--space-2);padding:3px 0;font-size:var(--text-xs)">';
+        html+='<span style="display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:50%;background:'+(isCurrent?'rgba(59,130,246,0.15)':isDone?'rgba(34,197,94,0.15)':'transparent')+';color:'+dotColor+';font-weight:700;font-size:10px">'+icon+'</span>';
+        html+='<span style="flex:1;color:'+textColor+';font-weight:'+fontWeight+'">Stage '+s.id+': '+App.esc(s.name)+'</span>';
+        if(isCurrent&&s.detail)html+='<span class="dimmed" style="font-size:10px">'+App.esc(s.detail)+'</span>';
+        else if(isDone)html+='<span style="font-size:10px;color:#22C55E">OK</span>';
+        html+='</div>';
+      });
+      html+='</div>';
+
+      container.innerHTML=html;
+    },
+    loadPipelineStatus(){
+      var self=this;
+      App.apiFetch('/api/pipeline/status').then(function(data){
+        if(data)self.handlePipelineUpdate(data);
+      }).catch(function(){});
     }
   },
 
@@ -1389,9 +1543,10 @@ const App={
         var isBreach=false;
         if(f.sla_deadline){var slaDate=new Date(f.sla_deadline);if(!isNaN(slaDate.getTime()))isBreach=slaDate<now&&(f.status==='open'||f.status==='in_progress');}
         var descPreview=f.description?App.esc((f.description||'').replace(/<[^>]+>/g,'').substring(0,80)):'';
-        return '<tr data-idx="'+i+'"><td>'+App.esc(f.product)+'</td><td><span class="badge '+App.sevClass(f.severity)+'">'+App.esc(f.severity)+'</span></td><td class="truncate" style="max-width:200px;color:var(--text-primary);font-weight:500" title="'+descPreview+'">'+App.esc(f.title)+'</td><td class="no-wrap">'+(f.cve?App.esc(f.cve):'<span class="dimmed">—</span>')+'</td><td><span class="status-border" style="border-color:'+sc.border+';color:'+sc.color+';font-size:11px">'+f.status.replace('_',' ')+'</span></td><td class="no-wrap" style="font-size:11px;'+(isBreach?'color:var(--risk-critical);font-weight:700':'color:var(--text-muted)')+'">'+(isBreach?'BREACHED':'OK')+'</td><td class="dimmed" style="font-size:11px">'+App.esc(f.owner||'—')+'</td></tr>';
+        var ticketBadge=f.issue_url?'<a href="'+App.esc(f.issue_url)+'" target="_blank" class="badge" style="background:rgba(59,130,246,0.12);color:#3B82F6;border:1px solid rgba(59,130,246,0.3);font-size:10px;text-decoration:none" title="'+App.esc(f.issue_url)+'" onclick="event.stopPropagation()">GH #'+(f.issue_url.split('/').pop())+'</a>':(f.jira_key?'<span class="badge" style="background:rgba(168,85,247,0.12);color:#A855F7;border:1px solid rgba(168,85,247,0.3);font-size:10px">'+App.esc(f.jira_key)+'</span>':'<span class="dimmed">—</span>');
+        return '<tr data-idx="'+i+'"><td>'+App.esc(f.product)+'</td><td><span class="badge '+App.sevClass(f.severity)+'">'+App.esc(f.severity)+'</span></td><td class="truncate" style="max-width:200px;color:var(--text-primary);font-weight:500" title="'+descPreview+'">'+App.esc(f.title)+'</td><td class="no-wrap">'+(f.cve?App.esc(f.cve):'<span class="dimmed">—</span>')+'</td><td><span class="status-border" style="border-color:'+sc.border+';color:'+sc.color+';font-size:11px">'+f.status.replace('_',' ')+'</span></td><td>'+ticketBadge+'</td><td class="no-wrap" style="font-size:11px;'+(isBreach?'color:var(--risk-critical);font-weight:700':'color:var(--text-muted)')+'">'+(isBreach?'BREACHED':'OK')+'</td><td class="dimmed" style="font-size:11px">'+App.esc(f.owner||'—')+'</td></tr>';
       }).join('');
-      App.$('lc-table-wrap').innerHTML='<table class="data-table"><thead><tr><th>Product</th><th>Severity</th><th>Title</th><th>CVE</th><th>Status</th><th>SLA</th><th>Owner</th></tr></thead><tbody>'+rows+'</tbody></table>';
+      App.$('lc-table-wrap').innerHTML='<table class="data-table"><thead><tr><th>Product</th><th>Severity</th><th>Title</th><th>CVE</th><th>Status</th><th>Ticket</th><th>SLA</th><th>Owner</th></tr></thead><tbody>'+rows+'</tbody></table>';
 
       // Wire row clicks
 
@@ -1411,6 +1566,8 @@ const App={
       if(f.cve){var at2=f.advisory_type||'';var idLbl=at2==='ghsa'?'GHSA':at2==='nswg'?'NSWG':'CVE';var idLnk=at2==='ghsa'?'<a class="cve-link" href="https://github.com/advisories/'+App.esc(f.cve)+'" target="_blank">'+App.esc(f.cve)+'</a>':at2==='nswg'?'<span class="cve-link">'+App.esc(f.cve)+'</span>':'<a class="cve-link" href="https://nvd.nist.gov/vuln/detail/'+App.esc(f.cve)+'" target="_blank">'+App.esc(f.cve)+'</a>';h+='<div style="margin-bottom:var(--space-3)"><div style="font-size:10px;font-weight:600;text-transform:uppercase;color:var(--text-muted)">'+idLbl+'</div><div>'+idLnk+'</div></div>';}
       if(f.cwe)h+='<div style="margin-bottom:var(--space-3)"><div style="font-size:10px;font-weight:600;text-transform:uppercase;color:var(--text-muted)">CWE</div><div style="font-size:var(--text-xs);color:var(--text-secondary)">'+App.esc(f.cwe)+'</div></div>';
       if(f.endpoint)h+='<div style="margin-bottom:var(--space-3)"><div style="font-size:10px;font-weight:600;text-transform:uppercase;color:var(--text-muted)">Endpoint</div><div style="font-size:var(--text-xs);color:var(--text-secondary);word-break:break-all">'+App.esc(f.endpoint)+'</div></div>';
+      if(f.issue_url){var ghNum=f.issue_url.split('/').pop();h+='<div style="margin-bottom:var(--space-3)"><div style="font-size:10px;font-weight:600;text-transform:uppercase;color:var(--text-muted)">GitHub Issue</div><div><a href="'+App.esc(f.issue_url)+'" target="_blank" class="cve-link" style="font-weight:600">Issue #'+ghNum+' (View on GitHub \u2197)</a></div></div>';}
+      if(f.jira_key){h+='<div style="margin-bottom:var(--space-3)"><div style="font-size:10px;font-weight:600;text-transform:uppercase;color:var(--text-muted)">Jira Ticket</div><div style="font-size:var(--text-xs);color:var(--text-secondary)">'+App.esc(f.jira_key)+'</div></div>';}
       h+='</div><div>';
       var sc={open:'#F59E0B',in_progress:'#3B82F6',fixed:'#22C55E',verified:'#22D3EE',false_positive:'#EF4444',risk_accepted:'#6B7280'};
       var sColor=sc[f.status]||'#6B7280';
@@ -1422,9 +1579,29 @@ const App={
         h+='<div style="margin-bottom:var(--space-3)"><div style="font-size:10px;font-weight:600;text-transform:uppercase;color:var(--text-muted)">SLA Deadline</div><div style="font-size:var(--text-xs);'+(breached?'color:var(--risk-critical);font-weight:700':'color:var(--text-secondary)')+'">'+App.esc(f.sla_deadline)+(breached?' (BREACHED)':'')+'</div></div>';}
       if(f.description)h+='<div style="margin-bottom:var(--space-3)"><div style="font-size:10px;font-weight:600;text-transform:uppercase;color:var(--text-muted)">Description</div><div style="font-size:var(--text-xs);color:var(--text-secondary);line-height:1.6">'+(f.description||'').replace(/<[^>]+>/g,'')+'</div></div>';
       if(f.scanner)h+='<div style="margin-bottom:var(--space-3)"><div style="font-size:10px;font-weight:600;text-transform:uppercase;color:var(--text-muted)">Source Scanner</div><div style="font-size:var(--text-xs);color:var(--text-secondary)">'+App.esc(f.scanner)+'</div></div>';
+      var fid = f.id || f.finding_id || '';
+      var statusOptions = ['open', 'in_progress', 'fixed', 'verified', 'false_positive', 'risk_accepted'];
+      var optHtml = statusOptions.map(function(s){
+        return '<option value="' + s + '"' + (f.status === s ? ' selected' : '') + '>' + s.replace('_', ' ') + '</option>';
+      }).join('');
+      h += '<div style="margin-top:var(--space-3);padding-top:var(--space-3);border-top:1px solid var(--border-subtle)"><div style="font-size:10px;font-weight:600;text-transform:uppercase;color:var(--text-muted);margin-bottom:6px">Change Status</div><div style="display:flex;gap:var(--space-2)"><select id="lc-trans-status" class="input" style="width:140px;padding:4px 8px;font-size:11px">' + optHtml + '</select><button class="btn btn-primary btn-sm" onclick="App.lifecycle.transition(\'' + App.esc(fid) + '\')">Update</button></div></div>';
       h+='</div></div>';
       el.innerHTML=h;card.style.display='block';
       card.scrollIntoView({behavior:'smooth',block:'nearest'});
+    },
+    transition(findingId){
+      if(!findingId){App.toast('No finding ID to transition','error');return;}
+      var sel=App.$('lc-trans-status');
+      var newStatus=sel?sel.value:'';
+      if(!newStatus)return;
+      App.apiFetch('/api/lifecycle/'+encodeURIComponent(findingId)+'/transition?status='+encodeURIComponent(newStatus),{method:'POST'}).then(function(data){
+        if(data.error){App.toast('Transition failed: '+(data.detail||data.error),'error');return;}
+        App.toast('Status updated to '+newStatus.replace('_',' '),'success');
+        var item=App.lifecycle._allFindings.find(function(x){return (x.id||x.finding_id)===findingId;});
+        if(item){item.status=newStatus;}
+        App.lifecycle._applyFilters();
+        App.apiFetch('/api/lifecycle/dashboard').then(function(d){if(d&&d.findings){App.data.lifecycle=d;App.lifecycle.init();}});
+      }).catch(function(e){App.toast('Transition error: '+(e.message||'error'),'error');});
     },
     _applyFilters(){
       var fStatus=App.$('lc-f-status')?App.$('lc-f-status').value:'';
@@ -1651,25 +1828,24 @@ const App={
       var self=this;
       App.apiFetch('/api/config/keys').then(function(data){
         var keys=data.keys||{};
-        // Update status badges for each group
-        // API returns UPPERCASE keys (GITHUB_TOKEN, NVD_API_KEY, etc.)
         var groups={ai:['GROQ_API_KEY','NVD_API_KEY'],github:['GITHUB_TOKEN'],jira:['JIRA_URL','JIRA_USER','JIRA_TOKEN','JIRA_PROJECT'],dd:['DEFECTDOJO_URL','DEFECTDOJO_API_KEY']};
         Object.keys(groups).forEach(function(g){
           var el=App.$('status-'+g);if(!el)return;
           var groupKeys=groups[g];
-          var configured=groupKeys.some(function(k){return keys[k]&&keys[k].set;});
+          var configured=groupKeys.some(function(k){return (keys[k]&&keys[k].set)||(keys[k.toLowerCase()]&&keys[k.toLowerCase()].set);});
           if(configured){
             el.textContent='Configured';el.style.color='#22C55E';el.style.background='rgba(34,197,94,0.1)';el.style.border='1px solid rgba(34,197,94,0.3)';
           }else{
             el.textContent='Not configured';el.style.color='#6B7280';el.style.background='rgba(107,114,128,0.1)';el.style.border='1px solid rgba(107,114,128,0.3)';
           }
         });
-        // Pre-fill URL fields if configured (but not password fields for security)
         self._fieldMap.forEach(function(f){
           var el=App.$(f.el);if(!el)return;
-          if(keys[f.key]&&keys[f.key].set&&!el.value){
-            // For URL fields, show a hint that it's configured
-            if(f.el.includes('url')&&!el.value){el.placeholder='Already configured - enter new value to change';}
+          var kUpper=f.key.toUpperCase();
+          var isSet=(keys[f.key]&&keys[f.key].set)||(keys[kUpper]&&keys[kUpper].set);
+          if(isSet&&!el.value){
+            if(f.el.includes('url')&&!el.value){el.placeholder='Already configured — enter new value to change';}
+            else if(!el.value){el.placeholder='•••••••• (configured)';}
           }
         });
       }).catch(function(){});
@@ -1688,14 +1864,14 @@ const App={
       keys.overwrite=overwrite;
       var self=this;
       return this._apiCall('Saving','/api/config/keys','POST','apikey-status',function(){
-        setTimeout(function(){self.loadKeys();},200); // Refresh status badges after save
+        setTimeout(function(){self.loadKeys();},200);
         return 'Keys saved and active!';
       },keys);
     },
     testJira(){return this._apiCall('Testing','/api/jira/test','POST','jira-status',function(d){return d.connected?'Connected to '+App.esc(d.url||'Jira'):App.esc(d.error||'Not configured');});},
     createJira(){return this._apiCall('Creating','/api/jira/create?threshold=60','POST','jira-status',function(d){return 'Created '+(d.created||0)+' issues';});},
     testDD(){return this._apiCall('Testing','/api/defectdojo/test','POST','dd-status',function(d){return d.connected?'Connected to '+App.esc(d.url||'DefectDojo'):App.esc(d.error||'Not configured');});},
-    importDD(){return this._apiCall('Importing','/api/defectdojo/import?product_name=all','POST','dd-status',function(d){return App.esc(d.message||'Imported');});}
+    importDD(){return this._apiCall('Importing','/api/defectdojo/import?product_name=all','POST','dd-status',function(d){return d.imported!=null?('Imported '+d.imported+' findings'):App.esc(d.message||'Imported');});}
   }
 };
 

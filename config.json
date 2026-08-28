@@ -53,6 +53,23 @@
         "wapiti": "http://localhost:8080",
         "nmap": "http://localhost:8080"
       }
+    },
+    "openpadavan": {
+      "display_name": "OpenPadavan Router",
+      "owner": "network-sec",
+      "asset_criticality": 8,
+      "business_impact": 5,
+      "exposure": 8,
+      "control_effectiveness": 3,
+      "data_sensitivity": 7,
+      "url": "http://192.168.1.1",
+      "github_repo": "Nihil-2005/cts_works",
+      "scanners": {
+        "nuclei": "http://192.168.1.1",
+        "zap": "http://192.168.1.1",
+        "wapiti": "http://192.168.1.1",
+        "nmap": "http://192.168.1.1"
+      }
     }
   },
   "scoring": {
@@ -70,24 +87,51 @@
       {
         "min": 90,
         "priority": "Critical",
-        "sla_hours": 24
+        "sla_hours": 10
       },
       {
         "min": 70,
         "priority": "High",
-        "sla_hours": 72
+        "sla_hours": 15
       },
       {
         "min": 40,
         "priority": "Medium",
-        "sla_hours": 168
+        "sla_hours": 20
+      },
+      {
+        "min": 20,
+        "priority": "Low",
+        "sla_hours": 24
       },
       {
         "min": 0,
-        "priority": "Low",
-        "sla_hours": 720
+        "priority": "Info",
+        "sla_hours": 30
       }
-    ]
+    ],
+    "severity_sla": {
+      "critical": {
+        "priority": "Critical",
+        "sla_hours": 10
+      },
+      "high": {
+        "priority": "High",
+        "sla_hours": 15
+      },
+      "medium": {
+        "priority": "Medium",
+        "sla_hours": 20
+      },
+      "low": {
+        "priority": "Low",
+        "sla_hours": 24
+      },
+      "info": {
+        "priority": "Info",
+        "sla_hours": 30
+      }
+    }
   },
   "filter": {
     "drop_severity": [

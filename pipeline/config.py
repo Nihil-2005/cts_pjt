@@ -114,18 +114,21 @@ class Config:
             p["display_name"] = name.replace("_", " ").title()
         return p
 
-    SEVERITY_SLA = {
-        "critical": {"priority": "Critical", "sla_hours": 24},
-        "high": {"priority": "High", "sla_hours": 72},
-        "medium": {"priority": "Medium", "sla_hours": 168},
-        "low": {"priority": "Low", "sla_hours": 336},
-        "info": {"priority": "Info", "sla_hours": 720},
+    DEFAULT_SEVERITY_SLA = {
+        "critical": {"priority": "Critical", "sla_hours": 10},
+        "high": {"priority": "High", "sla_hours": 15},
+        "medium": {"priority": "Medium", "sla_hours": 20},
+        "low": {"priority": "Low", "sla_hours": 24},
+        "info": {"priority": "Info", "sla_hours": 30},
     }
 
     def sla_for(self, score: float, severity: str = "") -> Dict[str, Any]:
         sev = (severity or "").lower().strip()
-        if sev in self.SEVERITY_SLA:
-            return self.SEVERITY_SLA[sev]
+        configured_sla = self.scoring.get("severity_sla", {})
+        if sev in configured_sla:
+            return configured_sla[sev]
+        if sev in self.DEFAULT_SEVERITY_SLA:
+            return self.DEFAULT_SEVERITY_SLA[sev]
         for band in sorted(self.sla_bands, key=lambda b: -b["min"]):
             if score >= band["min"]:
                 return band

@@ -18,13 +18,10 @@ def _norm_endpoint(endpoint: Optional[str]) -> str:
     if not endpoint:
         return ""
     e = str(endpoint).strip().lower()
-    e = re.sub(r"^https?://", "", e)
+    e = re.sub(r"^[a-z0-9+.-]+://", "", e)
     e = re.sub(r"[?#].*$", "", e)
-    m = re.match(r"^[^/]*:(\d+)/(.*)", e)
-    if m:
-        e = m.group(2)
-    elif not e.startswith("/") and "/" not in e.split(":", 1)[0]:
-        pass
+    if "/" in e:
+        e = e.split("/", 1)[1]
     e = e.strip("/")
     return e
 

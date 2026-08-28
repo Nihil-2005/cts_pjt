@@ -19,17 +19,21 @@ header "Starting Dashboard Server"
 
 VENV_DIR="$SCRIPT_DIR/venv"
 VENV_PYTHON=""
-if [ -f "$VENV_DIR/Scripts/python.exe" ]; then
-    VENV_PYTHON="$VENV_DIR/Scripts/python.exe"
-elif [ -f "$VENV_DIR/Scripts/python" ]; then
-    VENV_PYTHON="$VENV_DIR/Scripts/python"
-elif [ -f "$VENV_DIR/bin/python" ]; then
+if [ -f "$VENV_DIR/bin/python" ] && "$VENV_DIR/bin/python" -c "import sys" >/dev/null 2>&1; then
     VENV_PYTHON="$VENV_DIR/bin/python"
+elif [ -f "$VENV_DIR/Scripts/python.exe" ] && "$VENV_DIR/Scripts/python.exe" -c "import sys" >/dev/null 2>&1; then
+    VENV_PYTHON="$VENV_DIR/Scripts/python.exe"
+elif [ -f "$VENV_DIR/Scripts/python" ] && "$VENV_DIR/Scripts/python" -c "import sys" >/dev/null 2>&1; then
+    VENV_PYTHON="$VENV_DIR/Scripts/python"
+elif command -v python3 >/dev/null 2>&1 && python3 -c "import fastapi" >/dev/null 2>&1; then
+    VENV_PYTHON=$(command -v python3)
+elif command -v python >/dev/null 2>&1 && python -c "import fastapi" >/dev/null 2>&1; then
+    VENV_PYTHON=$(command -v python)
 fi
 
 if [ -z "$VENV_PYTHON" ]; then
-    error "No Python found in venv at $VENV_DIR"
-    error "Run: bash scripts/01-setup.sh"
+    error "No working Python environment found with project dependencies installed."
+    error "Please run: bash scripts/01-setup.sh"
     exit 1
 fi
 info "Using Python: $VENV_PYTHON"
@@ -82,11 +86,25 @@ elif command -v powershell.exe &> /dev/null; then
 fi
 
 if [ "$PORT_IN_USE" = true ]; then
-    error "Port $PORT is already in use!"
-    error "Kill it first or use a different port: bash scripts/05-dashboard.sh 9000"
-    exit 1
+    if curl -s --max-time 2 "http://localhost:$PORT/api/health" >/dev/null 2>&1; then
+        success "Dashboard is already running and healthy on port $PORT"
+        (sleep 1 && case "$(uname -s)" in
+            MINGW*|MSYS*|CYGWIN*)  cmd.exe /c start "" "$URL" 2>/dev/null ;;
+            Darwin*)               open "$URL" ;;
+            *)                     xdg-open "$URL" 2>/dev/null ;;
+        esac) &
+        exit 0
+    else
+        warn "Port $PORT is occupied by an unresponsive process — freeing port..."
+        if command -v fuser &>/dev/null; then
+            fuser -k "${PORT}/tcp" 2>/dev/null || true
+        elif command -v powershell.exe &>/dev/null; then
+            powershell.exe -Command "Get-NetTCPConnection -LocalPort $PORT -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id \$_.OwningProcess -Force -ErrorAction SilentlyContinue }" 2>/dev/null || true
+        fi
+        sleep 1
+    fi
 fi
-success "Port $PORT available"
+success "Port $PORT ready"
 
 (sleep 3 && case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*)  cmd.exe /c start "" "$URL" 2>/dev/null ;;
